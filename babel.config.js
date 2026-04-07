@@ -11,7 +11,7 @@ module.exports = function (api) {
       [
         'babel-plugin-transform-inline-environment-variables',
         {
-          include: ['MERCHANT_PORTAL_URL', 'STORE_SIGNUP_URL'],
+          include: ['MERCHANT_PORTAL_URL', 'STORE_SIGNUP_URL', 'API_BASE_URL'],
         },
       ],
     ],

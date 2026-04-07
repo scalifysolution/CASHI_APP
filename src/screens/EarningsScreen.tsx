@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+// @refresh reset
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
+  RefreshControl,
   StatusBar,
   StyleSheet,
   Text,
@@ -9,44 +12,150 @@ import {
 } from 'react-native';
 import { useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { apiRequest } from '../api/client';
+import { useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
 
-// --- Professional Mock Data ---
-const EARNINGS_DATA = [
-  { id: '1', store: 'Deep @ Toys & More', amount: 236.00, coins: 45, refId: '#31245560941', date: '20 Mar 2026', type: 'Earned' },
-  { id: '2', store: 'Ma The Pyar Restaurant', amount: 3.00, coins: 5, refId: '#31248560942', date: '19 Mar 2026', type: 'Earned' },
-  { id: '3', store: 'Barista Coffee House', amount: 450.50, coins: 92, refId: '#31248560945', date: '18 Mar 2026', type: 'Earned' },
-  { id: '4', store: 'Cookie Cottage Bakery', amount: 120.00, coins: 25, refId: '#31248560949', date: '15 Mar 2026', type: 'Earned' },
-];
+type Dashboard = {
+  points: { available: number; earned: number; redeemed: number };
+  cashback: { savedAmount: number };
+};
+
+type EarningItem = {
+  id: string;
+  createdAt: string;
+  amount: number;
+  originalAmount: number | null;
+  discountAmount: number;
+  pointsEarned: number;
+  pointsRedeemed: number;
+  shop: { id: string; name: string; imageUrl: string | null };
+};
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+}
 
 export function EarningsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const showBack = route.name === 'EarningsFromMenu';
   const [activeTab, setActiveTab] = useState('Earnings');
+  const token = useAppSelector((s) => s.auth.accessToken);
 
-  const renderTransaction = ({ item }: { item: typeof EARNINGS_DATA[0] }) => (
-    <View style={styles.transactionRow}>
-      <TouchableOpacity activeOpacity={0.8} style={styles.transactionCard}>
-        <View style={styles.cardHeader}>
-          <View style={styles.storeCircle}>
-            <Text style={styles.storeInitial}>{item.store[0]}</Text>
+  const [dash, setDash] = useState<Dashboard | null>(null);
+  const [items, setItems] = useState<EarningItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const loadingMoreRef = useRef(false);
+  const reachedEndDuringMomentumRef = useRef(false);
+  const lastRequestedPageRef = useRef(0);
+
+  const PAGE_SIZE = 20;
+
+  const load = async (mode: 'initial' | 'refresh' | 'more') => {
+    if (!token) return;
+    if (mode === 'more' && (loadingMoreRef.current || !hasMore)) return;
+    if (mode === 'initial') setLoading(true);
+    else if (mode === 'refresh') setRefreshing(true);
+    else {
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    }
+    setError(null);
+    try {
+      const targetPage = mode === 'more' ? page + 1 : 1;
+      if (mode === 'more' && targetPage === lastRequestedPageRef.current) return;
+      lastRequestedPageRef.current = targetPage;
+      const [d, e] = await Promise.all([
+        apiRequest<Dashboard>('/users/me/dashboard', { method: 'GET', token }),
+        apiRequest<{ page: number; limit: number; total: number; items: EarningItem[] }>(
+          `/users/me/earnings?page=${targetPage}&limit=${PAGE_SIZE}`,
+          {
+            method: 'GET',
+            token,
+          },
+        ),
+      ]);
+      setDash(d);
+      setPage(targetPage);
+      setHasMore(targetPage * (e.limit ?? PAGE_SIZE) < (e.total ?? 0));
+      const nextItems = e.items ?? [];
+      setItems((prev) => (mode === 'more' ? [...prev, ...nextItems] : nextItems));
+    } catch (err: any) {
+      setError(err?.message ?? 'Failed to load earnings');
+    } finally {
+      if (mode === 'initial') setLoading(false);
+      else if (mode === 'refresh') setRefreshing(false);
+      else {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    load('initial');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const filtered = useMemo(() => {
+    if (activeTab === 'Redeemed') return items.filter((i) => (i.pointsRedeemed ?? 0) > 0);
+    return items.filter((i) => (i.pointsEarned ?? 0) > 0);
+  }, [activeTab, items]);
+
+  const pointsAvailable = String(dash?.points?.available ?? 0);
+  const coinsAvailable = String(dash?.points?.earned ?? 0);
+  const cashback = `₹${dash?.points?.available ?? 0}`;
+
+  const renderTransaction = ({ item }: { item: EarningItem }) => {
+    const store = item.shop?.name ?? 'Store';
+    const isRedeem = activeTab === 'Redeemed';
+    const coins = isRedeem ? item.pointsRedeemed : item.pointsEarned;
+    return (
+      <View style={styles.transactionRow}>
+        <TouchableOpacity activeOpacity={0.8} style={styles.transactionCard}>
+          <View style={styles.cardHeader}>
+            <View style={styles.storeCircle}>
+              <Text style={styles.storeInitial}>{store[0]?.toUpperCase() ?? 'S'}</Text>
+            </View>
+            <View style={styles.mainInfo}>
+              <Text style={styles.storeName} numberOfLines={1}>
+                {store}
+              </Text>
+              <Text style={styles.dateText}>
+                {formatDate(item.createdAt)} • #{item.id.slice(-8)}
+              </Text>
+            </View>
+            <View style={styles.amountCol}>
+              <Text style={styles.transactionAmount}>₹{item.amount}</Text>
+              <View
+                style={[
+                  styles.coinBadge,
+                  isRedeem && { backgroundColor: 'rgba(255,82,82,0.14)' },
+                ]}>
+                <View
+                  style={[
+                    styles.coinDot,
+                    isRedeem && { backgroundColor: '#FF5252' },
+                  ]}
+                />
+                <Text style={[styles.coinText, isRedeem && { color: '#FF5252' }]}>
+                  {isRedeem ? `-${coins}` : `+${coins}`}
+                </Text>
+              </View>
+            </View>
           </View>
-          <View style={styles.mainInfo}>
-            <Text style={styles.storeName} numberOfLines={1}>{item.store}</Text>
-            <Text style={styles.dateText}>{item.date} • {item.refId}</Text>
-          </View>
-          <View style={styles.amountCol}>
-             <Text style={styles.transactionAmount}>₹{item.amount.toFixed(2)}</Text>
-             <View style={styles.coinBadge}>
-                <View style={styles.coinDot} />
-                <Text style={styles.coinText}>+{item.coins}</Text>
-             </View>
-          </View>
-        </View>
-      </TouchableOpacity>
-    </View>
-  );
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -73,17 +182,17 @@ export function EarningsScreen({ navigation }: any) {
         <View style={styles.balanceWidget}>
           <View style={styles.balanceItem}>
             <Text style={styles.balLabel}>POINTS</Text>
-            <Text style={styles.balVal}>1,240</Text>
+            <Text style={styles.balVal}>{pointsAvailable}</Text>
           </View>
           <View style={styles.balDivider} />
           <View style={styles.balanceItem}>
             <Text style={styles.balLabel}>COINS</Text>
-            <Text style={[styles.balVal, { color: brand.blue }]}>450</Text>
+            <Text style={[styles.balVal, { color: brand.blue }]}>{coinsAvailable}</Text>
           </View>
           <View style={styles.balDivider} />
           <View style={styles.balanceItem}>
             <Text style={styles.balLabel}>CASHBACK</Text>
-            <Text style={styles.balVal}>₹120</Text>
+            <Text style={styles.balVal}>{cashback}</Text>
           </View>
         </View>
       </View>
@@ -108,18 +217,86 @@ export function EarningsScreen({ navigation }: any) {
         </View>
 
         <FlatList
-          data={EARNINGS_DATA}
+          data={filtered}
           renderItem={renderTransaction}
           keyExtractor={(item) => item.id}
           style={styles.list}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => load('refresh')}
+              tintColor={brand.blue}
+            />
+          }
           ListHeaderComponent={() => (
             <View style={styles.listHeader}>
                <Text style={styles.timelineLabel}>Recent Activity</Text>
-               <TouchableOpacity><Text style={styles.filterText}>Filter</Text></TouchableOpacity>
+               <TouchableOpacity onPress={() => load('refresh')}>
+                 <Text style={styles.filterText}>{loading ? 'Loading…' : 'Refresh'}</Text>
+               </TouchableOpacity>
             </View>
           )}
+          onEndReachedThreshold={0.4}
+          onEndReached={() => {
+            if (
+              reachedEndDuringMomentumRef.current ||
+              loading ||
+              refreshing ||
+              loadingMore ||
+              !hasMore ||
+              items.length < PAGE_SIZE
+            ) {
+              return;
+            }
+            reachedEndDuringMomentumRef.current = true;
+            if (!loading && !refreshing && !loadingMore && hasMore) {
+              void load('more');
+            }
+          }}
+          onMomentumScrollBegin={() => {
+            reachedEndDuringMomentumRef.current = false;
+          }}
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={styles.footerLoading}>
+                <ActivityIndicator color={brand.blue} size="small" />
+                <Text style={styles.footerLoadingText}>Loading more...</Text>
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={() => {
+            if (loading) return null;
+            if (error) {
+              return (
+                <View style={styles.emptyWrap}>
+                  <Text style={styles.emptyTitle}>Couldn’t load earnings</Text>
+                  <Text style={styles.emptySub}>Please try again.</Text>
+                  <TouchableOpacity
+                    style={styles.emptyBtn}
+                    onPress={() => load('refresh')}
+                    activeOpacity={0.9}>
+                    <Text style={styles.emptyBtnText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            }
+            return (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyTitle}>
+                  {activeTab === 'Redeemed'
+                    ? 'No redemptions yet'
+                    : 'No earnings yet'}
+                </Text>
+                <Text style={styles.emptySub}>
+                  {activeTab === 'Redeemed'
+                    ? 'When you redeem coins, they will show up here.'
+                    : 'Shop at partner stores to start earning coins.'}
+                </Text>
+              </View>
+            );
+          }}
         />
       </View>
     </View>
@@ -222,4 +399,56 @@ const styles = StyleSheet.create({
   coinBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: brand.blueLight, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   coinDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: brand.blue, marginRight: 6 },
   coinText: { color: brand.blue, fontSize: 11, fontWeight: '900' },
+
+  emptyWrap: {
+    marginTop: 8,
+    paddingVertical: 26,
+    paddingHorizontal: 18,
+    backgroundColor: brand.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: brand.inputBg,
+    alignItems: 'center',
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: brand.cardHeading,
+    letterSpacing: -0.2,
+    textAlign: 'center',
+  },
+  emptySub: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: '600',
+    color: brand.cardBody,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  emptyBtn: {
+    marginTop: 14,
+    height: 42,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: brand.blue,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyBtnText: {
+    color: brand.surface,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  footerLoading: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    flexDirection: 'row',
+  },
+  footerLoadingText: {
+    fontSize: 12,
+    color: brand.helperColor,
+    fontWeight: '700',
+  },
 });

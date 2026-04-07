@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
+  Image,
+  RefreshControl,
   StatusBar,
   StyleSheet,
   Text,
@@ -11,48 +13,160 @@ import {
 import { useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { brand } from '../theme';
+import { useAppSelector } from '../store/hooks';
+import { apiRequest } from '../api/client';
+import { API_BASE_URL } from '../config/env';
 
 const { width } = Dimensions.get('window');
 const COLUMN_WIDTH = (width - 60) / 2; // Precise grid calculation
 
-// --- Mock Data ---
-const COUPONS_DATA = [
-  { id: '1', name: 'Cookie Cottage', daysLeft: 158, logo: 'C' },
-  { id: '2', name: 'Barista', daysLeft: 614, logo: 'B' },
-  { id: '3', name: 'FreshMart', daysLeft: 12, logo: 'F' },
-  { id: '4', name: 'Nike Store', daysLeft: 45, logo: 'N' },
-  { id: '5', name: 'Starbucks', daysLeft: 5, logo: 'S' },
-  { id: '6', name: 'Zomato', daysLeft: 120, logo: 'Z' },
-];
+type CouponItem = {
+  assignmentId: string;
+  status: 'ASSIGNED' | 'REDEEMED' | 'EXPIRED';
+  assignedAt: string;
+  redeemedAt: string | null;
+  coupon: {
+    id: string;
+    shopId: string;
+    title: string;
+    shortDescription: string | null;
+    longDescription: string | null;
+    valueType: 'FIXED' | 'PERCENTAGE';
+    valueFixed: number | null;
+    valuePercent: number | null;
+    minOrderValue: number | null;
+    status: 'DRAFT' | 'ACTIVE' | 'EXPIRED';
+    activeAt: string | null;
+    expiresAt: string | null;
+    imageUrl: string | null;
+  } | null;
+};
+
+type MyCouponsResponse = {
+  active: CouponItem[];
+  used: CouponItem[];
+  expired: CouponItem[];
+};
+
+function assetUrl(pathOrUrl: string | null) {
+  if (!pathOrUrl) return null;
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  if (!pathOrUrl.startsWith('/')) return pathOrUrl;
+  // API_BASE_URL includes /api, but uploads are served from the root.
+  const origin = API_BASE_URL.replace(/\/+$/, '').replace(/\/api$/, '');
+  return `${origin}${pathOrUrl}`;
+}
+
+function daysLeft(expiresAt: string | null) {
+  if (!expiresAt) return null;
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  return Math.ceil(ms / (1000 * 60 * 60 * 24));
+}
 
 export function CouponsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const showBack = route.name === 'CouponsFromMenu';
   const [activeTab, setActiveTab] = useState('Active');
+  const token = useAppSelector((s) => s.auth.accessToken);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<MyCouponsResponse>({
+    active: [],
+    used: [],
+    expired: [],
+  });
 
-  const renderCoupon = ({ item }: { item: typeof COUPONS_DATA[0] }) => (
+  const load = async (mode: 'initial' | 'refresh') => {
+    if (!token) return;
+    if (mode === 'initial') setLoading(true);
+    else setRefreshing(true);
+    setError(null);
+    try {
+      const res = await apiRequest<MyCouponsResponse>('/users/me/coupons', {
+        method: 'GET',
+        token,
+      });
+      setData(res);
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to load coupons');
+    } finally {
+      if (mode === 'initial') setLoading(false);
+      else setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    load('initial');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const list = useMemo(() => {
+    if (activeTab === 'Used') return data.used;
+    if (activeTab === 'Expired') return data.expired;
+    return data.active;
+  }, [activeTab, data.active, data.expired, data.used]);
+
+  const headerText = useMemo(() => {
+    // Keep the "no coupons" message only in ListEmptyComponent (below),
+    // so we don't show it twice (top + content).
+    if (loading) return '';
+    if (error) return '';
+    if (list.length === 0) return '';
+    return `${list.length} ${activeTab.toLowerCase()} coupon${list.length === 1 ? '' : 's'}`;
+  }, [activeTab, error, list.length, loading]);
+
+  const renderCoupon = ({ item }: { item: CouponItem }) => {
+    const c = item.coupon;
+    const title = c?.title ?? 'Coupon';
+    const img = assetUrl(c?.imageUrl ?? null);
+    const dleft = daysLeft(c?.expiresAt ?? null);
+    const badge =
+      activeTab === 'Used'
+        ? 'Used'
+        : activeTab === 'Expired'
+          ? 'Expired'
+          : dleft == null
+            ? 'No expiry'
+            : dleft <= 0
+              ? 'Expires today'
+              : `${dleft} days left`;
+
+    const initial = title.trim()?.[0]?.toUpperCase() ?? 'C';
+
+    return (
     <TouchableOpacity activeOpacity={0.9} style={styles.couponCard}>
       {/* Expiry Badge */}
       <View style={styles.expiryBadge}>
-        <Text style={styles.expiryText}>{item.daysLeft} days left</Text>
+        <Text style={styles.expiryText}>{badge}</Text>
       </View>
 
       {/* Logo Container */}
       <View style={styles.logoContainer}>
-        <Text style={styles.initialText}>{item.logo}</Text>
-        {/* If you have images, replace Text with: 
-            <Image source={item.image} style={styles.brandImage} /> 
-        */}
+        {img ? (
+          <Image
+            source={{ uri: img }}
+            style={styles.brandImage}
+            resizeMode="cover"
+          />
+        ) : (
+          <Text style={styles.initialText}>{initial}</Text>
+        )}
       </View>
 
       {/* Brand Info */}
       <View style={styles.cardFooter}>
-        <Text style={styles.brandName} numberOfLines={1}>{item.name}</Text>
-        <Text style={styles.offerText}>Tap to View</Text>
+        <Text style={styles.brandName} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={styles.offerText} numberOfLines={1}>
+          {c?.shortDescription ?? 'Tap to view'}
+        </Text>
       </View>
     </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -90,16 +204,60 @@ export function CouponsScreen({ navigation }: any) {
 
       {/* --- COUPONS GRID --- */}
       <FlatList
-        data={COUPONS_DATA}
+        data={list}
         renderItem={renderCoupon}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.assignmentId}
         numColumns={2}
         contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 100 }]}
         showsVerticalScrollIndicator={false}
         columnWrapperStyle={styles.row}
-        ListHeaderComponent={() => (
-          <Text style={styles.countText}>You have {COUPONS_DATA.length} active coupons</Text>
-        )}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => load('refresh')}
+            tintColor={brand.blue}
+          />
+        }
+        ListHeaderComponent={() =>
+          headerText ? <Text style={styles.countText}>{headerText}</Text> : null
+        }
+        ListEmptyComponent={() => {
+          if (loading) return null;
+          if (error) {
+            return (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyTitle}>Couldn’t load coupons</Text>
+                <Text style={styles.emptySub}>
+                  Check your connection and try again.
+                </Text>
+                <TouchableOpacity
+                  style={styles.emptyBtn}
+                  onPress={() => load('refresh')}
+                  activeOpacity={0.9}>
+                  <Text style={styles.emptyBtnText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          }
+          return (
+            <View style={styles.emptyWrap}>
+              <Text style={styles.emptyTitle}>
+                {activeTab === 'Used'
+                  ? 'No used coupons yet'
+                  : activeTab === 'Expired'
+                    ? 'No expired coupons'
+                    : 'No active coupons yet'}
+              </Text>
+              <Text style={styles.emptySub}>
+                {activeTab === 'Active'
+                  ? 'Earn coupons when you shop at partner stores. They’ll appear here automatically.'
+                  : activeTab === 'Used'
+                    ? 'Once you redeem a coupon, it will show up here.'
+                    : 'When a coupon expires, it will move here.'}
+              </Text>
+            </View>
+          );
+        }}
       />
     </View>
   );
@@ -191,6 +349,45 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 20,
   },
+  emptyWrap: {
+    marginTop: 8,
+    paddingVertical: 26,
+    paddingHorizontal: 18,
+    backgroundColor: brand.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: brand.inputBg,
+    alignItems: 'center',
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: brand.cardHeading,
+    letterSpacing: -0.2,
+    textAlign: 'center',
+  },
+  emptySub: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: '600',
+    color: brand.cardBody,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  emptyBtn: {
+    marginTop: 14,
+    height: 42,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: brand.blue,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyBtnText: {
+    color: brand.surface,
+    fontSize: 13,
+    fontWeight: '800',
+  },
 
   // Card Design
   couponCard: {
@@ -230,6 +427,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 20,
     marginBottom: 15,
+    overflow: 'hidden',
+  },
+  brandImage: {
+    width: 80,
+    height: 80,
   },
   initialText: {
     fontSize: 28,

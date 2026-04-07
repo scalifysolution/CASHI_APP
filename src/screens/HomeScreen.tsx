@@ -1,5 +1,8 @@
+// @refresh reset
 import {
+  ActivityIndicator,
   Image,
+  Linking,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -10,12 +13,17 @@ import {
 import type { CompositeNavigationProp } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { NotificationBellIcon } from '../components/icons/NotificationBellIcon';
 import { useHomeMenu } from '../navigation/HomeMenuContext';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
+import { apiRequest } from '../api/client';
+import { API_BASE_URL, GOOGLE_MAPS_API_KEY } from '../config/env';
+import { logout } from '../store/authSlice';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
+import { requestLocationCoords } from '../utils/requestLocationCoords';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type HomeNav = CompositeNavigationProp<
   BottomTabNavigationProp<MainTabParamList>,
@@ -28,6 +36,51 @@ const MenuIcon = () => (
     <View style={styles.menuLineSub} />
   </View>
 );
+
+async function resolveLocationLabel(latitude: number, longitude: number): Promise<string | null> {
+  if (!GOOGLE_MAPS_API_KEY) return null;
+  const q = `latlng=${encodeURIComponent(`${latitude},${longitude}`)}&language=en&region=IN&key=${encodeURIComponent(
+    GOOGLE_MAPS_API_KEY,
+  )}`;
+  const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?${q}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (data?.status && data.status !== 'OK') {
+    if (__DEV__) {
+      console.log(
+        '[HomeScreen] geocode failed:',
+        String(data.status),
+        data?.error_message ? String(data.error_message) : '',
+      );
+    }
+    return null;
+  }
+  const first = Array.isArray(data?.results) ? data.results[0] : null;
+  const components: any[] = Array.isArray(first?.address_components)
+    ? first.address_components
+    : [];
+  const pick = (types: string[]) =>
+    components.find((c) => types.every((t) => Array.isArray(c?.types) && c.types.includes(t)))
+      ?.long_name ?? null;
+  return (
+    pick(['sublocality']) ||
+    pick(['sublocality_level_1']) ||
+    pick(['locality']) ||
+    pick(['administrative_area_level_3']) ||
+    pick(['administrative_area_level_2']) ||
+    pick(['administrative_area_level_1']) ||
+    first?.formatted_address ||
+    null
+  );
+}
+
+function assetUrl(pathOrUrl: string | null) {
+  if (!pathOrUrl) return null;
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  if (!pathOrUrl.startsWith('/')) return pathOrUrl;
+  const origin = API_BASE_URL.replace(/\/+$/, '').replace(/\/api$/, '');
+  return `${origin}${pathOrUrl}`;
+}
 
 function QRBlock({
   light = false,
@@ -69,6 +122,288 @@ export function HomeScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<HomeNav>();
   const { setMenuVisible } = useHomeMenu();
+  const dispatch = useAppDispatch();
+  const token = useAppSelector((s) => s.auth.accessToken);
+  const displayName = useAppSelector((s) => s.user.displayName);
+
+  const [dash, setDash] = useState<{
+    points: { available: number; earned: number; redeemed: number };
+    cashback: { savedAmount: number };
+    coupons: { active: number; used: number; expired: number };
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [nearby, setNearby] = useState<
+    { id: string; name: string; city: string; state: string; imageUrl: string | null; distanceKm?: number | null }[]
+  >([]);
+  const [activeCoupons, setActiveCoupons] = useState<
+    { assignmentId: string; coupon: { id: string; title: string; shortDescription: string | null; minOrderValue: number | null } | null }[]
+  >([]);
+  const [locationTag, setLocationTag] = useState('Browse stores');
+  const [locationRequired, setLocationRequired] = useState(false);
+  const [serviceUnavailableAtLocation, setServiceUnavailableAtLocation] = useState(false);
+  const [locationActionBusy, setLocationActionBusy] = useState(false);
+  const [failedShopImages, setFailedShopImages] = useState<Record<string, boolean>>({});
+  const hasLoadedOnceRef = useRef(false);
+  const lastSyncedLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const lastResolvedLocationRef = useRef<{ latitude: number; longitude: number; label: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (loading || locationRequired || serviceUnavailableAtLocation) {
+      navigation.setOptions({
+        tabBarStyle: { display: 'none' },
+      });
+      return;
+    }
+    navigation.setOptions({
+      tabBarStyle: undefined,
+    });
+  }, [loading, locationRequired, serviceUnavailableAtLocation, navigation]);
+
+  const handleAllowLocation = useCallback(async () => {
+    if (!token) return;
+    setLocationActionBusy(true);
+    try {
+      const locationResult = await requestLocationCoords();
+      if (locationResult.permissionDenied) {
+        await Linking.openSettings().catch(() => {});
+        return;
+      }
+      const coords = locationResult.coords;
+      if (!coords) return;
+
+      setLocationRequired(false);
+      setServiceUnavailableAtLocation(false);
+      setLocationTag('Location');
+      lastSyncedLocationRef.current = coords;
+      const resolvedLabel = await resolveLocationLabel(coords.latitude, coords.longitude).catch(
+        () => null,
+      );
+      if (resolvedLabel?.trim()) {
+        setLocationTag(resolvedLabel.trim());
+        lastResolvedLocationRef.current = {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          label: resolvedLabel.trim(),
+        };
+      }
+      await apiRequest('/auth/customer/location', {
+        method: 'POST',
+        token,
+        body: {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        },
+      }).catch(() => {});
+    } finally {
+      setLocationActionBusy(false);
+    }
+  }, [token]);
+
+  const handleLogout = useCallback(async () => {
+    setLocationActionBusy(true);
+    try {
+      await dispatch(logout()).unwrap().catch(() => {});
+    } finally {
+      setLocationActionBusy(false);
+    }
+  }, [dispatch]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      (async () => {
+        if (!token) return;
+        const showBlockingLoader = !hasLoadedOnceRef.current;
+        if (showBlockingLoader) setLoading(true);
+        try {
+          const locationResult = await requestLocationCoords();
+          if (!alive) return;
+          if (locationResult.permissionDenied) {
+            setLocationRequired(true);
+            return;
+          }
+          setLocationRequired(false);
+          setServiceUnavailableAtLocation(false);
+          const coords = locationResult.coords;
+          setLocationTag(coords ? 'Location' : 'Browse stores');
+          if (coords) {
+            const lastResolved = lastResolvedLocationRef.current;
+            const shouldResolveLocation =
+              !lastResolved ||
+              Math.abs(lastResolved.latitude - coords.latitude) > 0.002 ||
+              Math.abs(lastResolved.longitude - coords.longitude) > 0.002;
+            if (shouldResolveLocation) {
+              const resolvedLabel = await resolveLocationLabel(
+                coords.latitude,
+                coords.longitude,
+              ).catch(() => null);
+              if (resolvedLabel?.trim()) {
+                setLocationTag(resolvedLabel.trim());
+                lastResolvedLocationRef.current = {
+                  latitude: coords.latitude,
+                  longitude: coords.longitude,
+                  label: resolvedLabel.trim(),
+                };
+              }
+            } else if (lastResolved?.label) {
+              setLocationTag(lastResolved.label);
+            }
+            const lastSynced = lastSyncedLocationRef.current;
+            const movedEnough =
+              !lastSynced ||
+              Math.abs(lastSynced.latitude - coords.latitude) > 0.0005 ||
+              Math.abs(lastSynced.longitude - coords.longitude) > 0.0005;
+            if (movedEnough) {
+              void apiRequest('/auth/customer/location', {
+                method: 'POST',
+                token,
+                body: {
+                  latitude: coords.latitude,
+                  longitude: coords.longitude,
+                },
+              })
+                .then(() => {
+                  lastSyncedLocationRef.current = coords;
+                })
+                .catch(() => {});
+            }
+          }
+          const shopsPath =
+            coords != null
+              ? `/shops/nearby?limit=10&radiusKm=10&lat=${encodeURIComponent(String(coords.latitude))}&lng=${encodeURIComponent(String(coords.longitude))}`
+              : '/shops/nearby?limit=10';
+          console.log(
+            '[HomeScreen] fetching nearby shops with coords:',
+            coords
+              ? { latitude: coords.latitude, longitude: coords.longitude }
+              : { latitude: null, longitude: null },
+          );
+
+          let shops: { items: any[] } = { items: [] };
+          try {
+            shops = await apiRequest<{ items: any[] }>(shopsPath, { method: 'GET' });
+          } catch {
+            shops = { items: [] };
+          }
+          if (!alive) return;
+          if (coords && (shops.items ?? []).length === 0) {
+            setNearby([]);
+            setActiveCoupons([]);
+            setDash(null);
+            setServiceUnavailableAtLocation(true);
+            return;
+          }
+
+          let dash: {
+            points: { available: number; earned: number; redeemed: number };
+            cashback: { savedAmount: number };
+            coupons: { active: number; used: number; expired: number };
+          } | null = { points: { available: 0, earned: 0, redeemed: 0 }, cashback: { savedAmount: 0 }, coupons: { active: 0, used: 0, expired: 0 } };
+          try {
+            dash = await apiRequest<any>('/users/me/dashboard', { method: 'GET', token });
+          } catch (e) {
+            void e;
+            dash = null;
+          }
+          if (!alive) return;
+
+          let coupons: { active: any[] } = { active: [] };
+          try {
+            coupons = await apiRequest<{ active: any[] }>('/users/me/coupons', {
+              method: 'GET',
+              token,
+            });
+          } catch {
+            coupons = { active: [] };
+          }
+          if (!alive) return;
+
+          setDash(dash);
+          setNearby(shops.items ?? []);
+          setActiveCoupons((coupons.active ?? []).slice(0, 4));
+          hasLoadedOnceRef.current = true;
+        } finally {
+          if (alive && showBlockingLoader) setLoading(false);
+        }
+      })();
+      return () => {
+        alive = false;
+      };
+    }, [token]),
+  );
+
+  const pointsText = useMemo(() => String(dash?.points?.available ?? 0), [dash]);
+  const coinsText = useMemo(() => String(dash?.points?.earned ?? 0), [dash]);
+  const cashbackText = useMemo(() => {
+    const availablePoints = Number(dash?.points?.available ?? 0);
+    return `₹${availablePoints}`;
+  }, [dash]);
+  const helloName = (displayName?.trim() ? displayName.trim() : 'there');
+  const showNearby = nearby.length > 0;
+  const showVouchers = activeCoupons.length > 0;
+  if (locationRequired) {
+    return (
+      <View style={styles.logoutOverlay}>
+        <View style={styles.locationGateCard}>
+          <Text style={styles.locationGateEmoji}>📍</Text>
+          <Text style={styles.logoutOverlayTitle}>Enable Location Access</Text>
+          <Text style={styles.logoutOverlayDesc}>
+            Allow location to discover nearby shops and continue.
+          </Text>
+          <TouchableOpacity
+            style={styles.locationPrimaryBtn}
+            onPress={handleAllowLocation}
+            activeOpacity={0.85}
+            disabled={locationActionBusy}>
+            {locationActionBusy ? (
+              <ActivityIndicator color={brand.dark} size="small" />
+            ) : (
+              <Text style={styles.locationPrimaryBtnText}>Allow Location</Text>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.locationSecondaryBtn}
+            onPress={handleLogout}
+            activeOpacity={0.8}
+            disabled={locationActionBusy}>
+            <Text style={styles.locationSecondaryBtnText}>Logout</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+  if (serviceUnavailableAtLocation) {
+    return (
+      <View style={styles.logoutOverlay}>
+        <View style={styles.locationGateCard}>
+          <Text style={styles.locationGateEmoji}>📍</Text>
+          <Text style={styles.logoutOverlayTitle}>Service Unavailable</Text>
+          <Text style={styles.logoutOverlayDesc}>
+            We are not present in your location right now.
+          </Text>
+          <TouchableOpacity
+            style={styles.locationSecondaryBtn}
+            onPress={handleLogout}
+            activeOpacity={0.8}
+            disabled={locationActionBusy}>
+            <Text style={styles.locationSecondaryBtnText}>Logout</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+  if (loading && !hasLoadedOnceRef.current) {
+    return (
+      <View style={styles.homeLoadingOverlay}>
+        <StatusBar barStyle="light-content" />
+        <Image source={require('../assets/cashi-logo.png')} style={styles.homeLoadingLogo} resizeMode="contain" />
+        <ActivityIndicator color={brand.surface} size="small" style={styles.homeLoadingSpinner} />
+        <Text style={styles.homeLoadingText}>Fetching nearby shops...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -99,42 +434,35 @@ export function HomeScreen() {
             <Image source={require('../assets/cashi-logo.png')} style={styles.logoMain} resizeMode="contain" />
           </View>
           <View style={styles.topBarRight}>
-            <TouchableOpacity
-              style={styles.iconCircle}
-              accessibilityRole="button"
-              accessibilityLabel="Notifications"
-              onPress={() => navigation.navigate('Notifications')}>
-              <NotificationBellIcon />
-            </TouchableOpacity>
           </View>
         </View>
 
         <View style={styles.balanceHeader}>
           <View style={styles.greetingRow}>
             <Text style={styles.greetingText} numberOfLines={2}>
-              Hello, Abhishek
+              Hello, {helloName}
             </Text>
             <View style={styles.locationContainer}>
               <View style={styles.gpsDot} />
               <Text style={styles.locationLabel} numberOfLines={1}>
-                Sector 85, Faridabad, HR
+                {locationTag}
               </Text>
               <View style={styles.chevronSmall} />
             </View>
           </View>
           <View style={styles.statsContainer}>
             <View style={styles.statBox}>
-              <Text style={styles.statVal}>1,240</Text>
+              <Text style={styles.statVal}>{pointsText}</Text>
               <Text style={styles.statTag}>POINTS</Text>
             </View>
             <View style={styles.dividerInner} />
             <View style={styles.statBox}>
-              <Text style={styles.statVal}>450</Text>
+              <Text style={styles.statVal}>{coinsText}</Text>
               <Text style={styles.statTag}>COINS</Text>
             </View>
             <View style={styles.dividerInner} />
             <View style={styles.statBox}>
-              <Text style={styles.statVal}>₹120</Text>
+              <Text style={styles.statVal}>{cashbackText}</Text>
               <Text style={styles.statTag}>CASHBACK</Text>
             </View>
           </View>
@@ -167,45 +495,111 @@ export function HomeScreen() {
             </View>
           </TouchableOpacity>
 
-          {/* 2. DISCOVER MERCHANTS (The "Nearby" Section) */}
+          {/* 2. DISCOVER MERCHANTS (Nearby Partners) */}
           <View style={styles.sectionTitleRow}>
             <Text style={styles.sectionHeading}>Nearby Partners</Text>
-            <TouchableOpacity><Text style={styles.actionText}>See Map</Text></TouchableOpacity>
+            {showNearby ? (
+              <TouchableOpacity onPress={() => navigation.navigate('ShopsDirectory')}>
+                <Text style={styles.actionText}>See all</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
-          
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.nearbyScroll}>
-             {['Cookie Cottage', 'Barista', 'FreshMart', 'Nike', 'Zara'].map((name, i) => (
-                <TouchableOpacity key={i} style={styles.merchantCard}>
-                   <View style={styles.merchantLogoWrap}>
-                      <Text style={styles.merchantInit}>{name[0]}</Text>
-                   </View>
-                   <Text style={styles.merchantTitle} numberOfLines={1}>{name}</Text>
-                   <View style={styles.rewardTag}>
-                      <Text style={styles.rewardTagText}>10% OFF</Text>
-                   </View>
+          {showNearby ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.nearbyScroll}>
+              {nearby.map((s: any, i: number) => (
+                <TouchableOpacity
+                  key={s.id ?? i}
+                  style={styles.merchantCard}
+                  activeOpacity={0.9}
+                  onPress={() => {
+                    // later: navigate to shop detail by username
+                  }}>
+                  <View style={styles.merchantLogoWrap}>
+                    {s.imageUrl && !failedShopImages[s.id] ? (
+                      <Image
+                        source={{ uri: assetUrl(s.imageUrl) ?? undefined }}
+                        style={styles.merchantLogoImage}
+                        resizeMode="cover"
+                        onError={() =>
+                          setFailedShopImages((prev) => ({
+                            ...prev,
+                            [s.id]: true,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <Text style={styles.merchantInit}>
+                        {(s.name?.[0] ?? 'S').toUpperCase()}
+                      </Text>
+                    )}
+                  </View>
+                  <Text style={styles.merchantTitle} numberOfLines={1}>
+                    {s.name}
+                  </Text>
+                  <View style={styles.rewardTag}>
+                    <Text style={styles.rewardTagText}>
+                      {s.distanceKm != null ? `${s.distanceKm} km` : 'PARTNER'}
+                    </Text>
+                  </View>
                 </TouchableOpacity>
-             ))}
-          </ScrollView>
+              ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.noNearbyWrap}>
+              <Text style={styles.noNearbyText}>
+                We are not present at your location now.
+              </Text>
+            </View>
+          )}
 
           {/* 3. YOUR BEST DEALS (Voucher Style) */}
-          <View style={styles.sectionTitleRow}>
-            <Text style={styles.sectionHeading}>Active Vouchers</Text>
-            <TouchableOpacity><Text style={styles.actionText}>Browse All</Text></TouchableOpacity>
-          </View>
+          {showVouchers ? (
+            <>
+              <View style={styles.sectionTitleRow}>
+                <Text style={styles.sectionHeading}>Active Vouchers</Text>
+                <TouchableOpacity onPress={() => navigation.navigate('Coupons')}>
+                  <Text style={styles.actionText}>Browse All</Text>
+                </TouchableOpacity>
+              </View>
 
-          {['Starbucks India', 'KFC Rewards'].map((name, i) => (
-            <TouchableOpacity key={i} style={styles.voucherRow} activeOpacity={0.9}>
-              <View style={[styles.voucherAccent, { backgroundColor: i === 0 ? brand.blue : '#FF5252' }]} />
-              <View style={styles.voucherContent}>
-                <Text style={styles.vouchLabel}>{name}</Text>
-                <Text style={styles.vouchMain}>20% INSTANT CASHBACK</Text>
-                <Text style={styles.vouchSub}>Valid on orders above ₹499</Text>
-              </View>
-              <View style={styles.voucherAction}>
-                <View style={styles.usePill}><Text style={styles.usePillText}>USE</Text></View>
-              </View>
-            </TouchableOpacity>
-          ))}
+              {activeCoupons.map((it, i) => {
+                const c = it.coupon;
+                return (
+                  <TouchableOpacity
+                    key={it.assignmentId}
+                    style={styles.voucherRow}
+                    activeOpacity={0.9}
+                    onPress={() => navigation.navigate('Coupons')}>
+                    <View
+                      style={[
+                        styles.voucherAccent,
+                        { backgroundColor: i % 2 === 0 ? brand.blue : '#FF5252' },
+                      ]}
+                    />
+                    <View style={styles.voucherContent}>
+                      <Text style={styles.vouchLabel}>{c?.title ?? 'Coupon'}</Text>
+                      <Text style={styles.vouchMain}>
+                        {c?.shortDescription ?? 'Tap to view'}
+                      </Text>
+                      <Text style={styles.vouchSub}>
+                        {c?.minOrderValue
+                          ? `Valid on orders above ₹${c.minOrderValue}`
+                          : 'Valid at partner store'}
+                      </Text>
+                    </View>
+                    <View style={styles.voucherAction}>
+                      <View style={styles.usePill}>
+                        <Text style={styles.usePillText}>USE</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </>
+          ) : null}
 
           {/* 4. SMART QUICK-ACTION WIDGET */}
           <TouchableOpacity style={styles.quickActionCard} activeOpacity={0.9}>
@@ -233,6 +627,92 @@ export function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: brand.dark, overflow: 'visible' },
+  logoutOverlay: {
+    flex: 1,
+    backgroundColor: '#0D111B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  locationGateCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#151B2A',
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  locationGateEmoji: {
+    fontSize: 30,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  logoutOverlayTitle: {
+    color: brand.surface,
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  logoutOverlayDesc: {
+    marginTop: 8,
+    color: brand.heroBody,
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  locationPrimaryBtn: {
+    minWidth: 190,
+    backgroundColor: brand.surface,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  locationPrimaryBtnText: {
+    color: brand.dark,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  locationSecondaryBtn: {
+    marginTop: 10,
+    minWidth: 190,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  locationSecondaryBtnText: {
+    color: brand.surface,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  homeLoadingOverlay: {
+    flex: 1,
+    backgroundColor: brand.dark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  homeLoadingLogo: {
+    width: 160,
+    height: 54,
+  },
+  homeLoadingSpinner: {
+    marginTop: 16,
+  },
+  homeLoadingText: {
+    marginTop: 12,
+    color: brand.heroBody,
+    fontSize: 13,
+    fontWeight: '600',
+  },
   
   // Hero & Header
   hero: { paddingHorizontal: 24, paddingBottom: 45 },
@@ -340,8 +820,18 @@ const styles = StyleSheet.create({
   sectionHeading: { fontSize: 18, fontWeight: '800', color: brand.cardHeading },
   actionText: { color: brand.blue, fontWeight: '700', fontSize: 13 },
   nearbyScroll: { paddingLeft: 24, paddingRight: 12, marginBottom: 12 },
+  noNearbyWrap: {
+    marginHorizontal: 24,
+    marginBottom: 8,
+    backgroundColor: '#F4F6FB',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  noNearbyText: { color: brand.helperColor, fontSize: 13, fontWeight: '700' },
   merchantCard: { width: 90, marginRight: 16, alignItems: 'center' },
   merchantLogoWrap: { width: 72, height: 72, borderRadius: 24, backgroundColor: brand.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 10, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 10, elevation: 2, borderWidth: 1, borderColor: '#F0F1F7' },
+  merchantLogoImage: { width: '100%', height: '100%', borderRadius: 24 },
   merchantInit: { fontSize: 24, fontWeight: '800', color: brand.cardHeading },
   merchantTitle: { fontSize: 12, color: brand.cardHeading, fontWeight: '700', marginBottom: 6 },
   rewardTag: { backgroundColor: brand.blueLight, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },

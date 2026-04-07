@@ -1,9 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import {
   Animated,
-  BackHandler,
-  Linking,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,10 +10,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Circle, Path, Rect } from 'react-native-svg';
-import { STORE_SIGNUP_URL } from '../config/env';
-import { useAppSelector } from '../store/hooks';
+import Svg, { Circle, Path } from 'react-native-svg';
+import { MERCHANT_PORTAL_URL } from '../config/env';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
+import { logout } from '../store/authSlice';
 
 // --- High-Fidelity Vector Icon Set ---
 
@@ -35,9 +33,29 @@ const Icon = ({ name, color = brand.surface, size = 20 }: { name: string; color?
   </Svg>
 );
 
+function withQueryParams(
+  url: string,
+  params: Record<string, string | undefined | null>,
+) {
+  const base = String(url || '').trim();
+  if (!base) return base;
+  const hashIdx = base.indexOf('#');
+  const beforeHash = hashIdx >= 0 ? base.slice(0, hashIdx) : base;
+  const hash = hashIdx >= 0 ? base.slice(hashIdx) : '';
+  const qs = Object.entries(params)
+    .filter(([, v]) => v != null && String(v).length > 0)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join('&');
+  if (!qs) return base;
+  const joiner = beforeHash.includes('?') ? '&' : '?';
+  return `${beforeHash}${joiner}${qs}${hash}`;
+}
+
 export function HomeSideMenu({ visible, onClose, navigation }: any) {
-  const cashiBusiness = useAppSelector((s) => s.user.cashiBusiness);
+  const dispatch = useAppDispatch();
+  const role = useAppSelector((s) => s.user.role);
   const displayName = useAppSelector((s) => s.user.displayName);
+  const token = useAppSelector((s) => s.auth.accessToken);
   const { width: windowWidth } = useWindowDimensions();
   
   const drawerWidth = useMemo(
@@ -70,7 +88,6 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
 
   const MENU_ITEMS = useMemo(() => [
     { label: 'My Coupons', icon: 'coupon', screen: 'CouponsFromMenu' },
-    { label: 'Earnings History', icon: 'earnings', screen: 'EarningsFromMenu' },
     { label: 'My Loyalty', icon: 'loyalty', screen: 'MyLoyalty' },
     { label: 'Rewards Marketplace', icon: 'rewards', screen: 'Rewards' },
     { label: 'Help & Support', icon: 'support', screen: null },
@@ -127,18 +144,28 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
               activeOpacity={0.9}
               onPress={() => {
                 closeDrawer();
-                cashiBusiness ? navigation?.navigate?.('MerchantPortal') : Linking.openURL(STORE_SIGNUP_URL);
+                const base = (MERCHANT_PORTAL_URL || '').replace(/\/+$/, '');
+                const isUser = String(role || '').toUpperCase() === 'USER' || !role;
+                const rawUrl = isUser ? `${base}/register` : `${base}`;
+                const url = withQueryParams(rawUrl, {
+                  token,
+                  action: isUser ? 'REGISTER_ON_CASHI' : 'REGISTER_SALE',
+                });
+                navigation?.navigate?.('WebPage', {
+                  title: isUser ? 'Start Cashi' : 'Register Sale',
+                  url,
+                });
               }}
             >
               <View style={styles.merchantIconBox}>
-                <Icon name={cashiBusiness ? 'sale' : 'store'} color={brand.surface} />
+                <Icon name={(String(role || '').toUpperCase() === 'USER' || !role) ? 'store' : 'sale'} color={brand.surface} />
               </View>
               <View style={styles.merchantTexts}>
                 <Text style={styles.merchantTitle}>
-                  {cashiBusiness ? 'Register Sale' : 'Start Cashi on your Store'}
+                  {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Start Cashi on your Store' : 'Register Sale'}
                 </Text>
                 <Text style={styles.merchantSub}>
-                  {cashiBusiness ? 'Record loyalty transactions' : 'Earn more as a partner'}
+                  {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Register your store and become a partner' : 'Record loyalty transactions'}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -149,7 +176,14 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
                 key={i} 
                 style={styles.menuItem} 
                 activeOpacity={0.7}
-                onPress={() => { closeDrawer(); if(item.screen) navigation?.navigate?.(item.screen); }}
+                onPress={() => {
+                  closeDrawer();
+                  if (item.label === 'Sign Out') {
+                    dispatch(logout());
+                    return;
+                  }
+                  if (item.screen) navigation?.navigate?.(item.screen);
+                }}
               >
                 <View style={styles.menuIconWrap}>
                    <Icon name={item.icon} color={item.isDestructive ? '#FF6B6B' : brand.surface} />

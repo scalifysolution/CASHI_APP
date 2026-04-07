@@ -1,6 +1,6 @@
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
@@ -10,18 +10,33 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  ToastAndroid,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useKeyboardBottomInset } from '../hooks/useKeyboardBottomInset';
 import type { RootStackParamList } from '../navigation/types';
 import { brand } from '../theme';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { requestOtp } from '../store/authSlice';
 
 type LoginNav = NativeStackNavigationProp<RootStackParamList, 'Login'>;
 
 export function LoginScreen() {
   const navigation = useNavigation<LoginNav>();
+  const dispatch = useAppDispatch();
+  const authStatus = useAppSelector((s) => s.auth.status);
+  const keyboardBottom = useKeyboardBottomInset();
+  const sendGuardRef = useRef(false);
   const [phone, setPhone] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      sendGuardRef.current = false;
+    }, []),
+  );
 
   // Check validity by stripping the space we will add during formatting
   const rawPhone = phone.replace(/\s/g, '');
@@ -42,14 +57,17 @@ export function LoginScreen() {
       <StatusBar barStyle="light-content" backgroundColor={brand.dark} />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        enabled={Platform.OS === 'ios'}>
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[
+            styles.scroll,
+            { paddingBottom: 32 + keyboardBottom },
+          ]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
-          bounces={false}>
+          bounces={false}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}>
           
           <View style={styles.heroSection}>
             <View style={styles.logoWrap}>
@@ -133,15 +151,35 @@ export function LoginScreen() {
               We&apos;ll send a one-time password to this number
             </Text>
 
+            {!!error && <Text style={styles.errorText}>{error}</Text>}
+
             <TouchableOpacity
               style={[styles.ctaButton, !isValid && styles.ctaButtonDisabled]}
               activeOpacity={isValid ? 0.85 : 1}
-              disabled={!isValid}
-              onPress={() =>
-                navigation.navigate('OtpVerification', { phone: rawPhone })
-              }>
+              disabled={!isValid || authStatus === 'loading'}
+              onPress={() => {
+                if (!isValid || authStatus === 'loading' || sendGuardRef.current) return;
+                sendGuardRef.current = true;
+                setError(null);
+                const phoneE164 = rawPhone.startsWith('+') ? rawPhone : `+91${rawPhone}`;
+                dispatch(requestOtp(phoneE164))
+                  .unwrap()
+                  .then((res) => {
+                    if (res?.devOtp && Platform.OS === 'android') {
+                      ToastAndroid.showWithGravity(
+                        `OTP: ${res.devOtp}`,
+                        ToastAndroid.LONG,
+                        ToastAndroid.TOP,
+                      );
+                    }
+                  })
+                  .catch(() => {
+                    sendGuardRef.current = false;
+                  });
+                navigation.navigate('OtpVerification', { phone: phoneE164 });
+              }}>
               <Text style={[styles.ctaText, !isValid && styles.ctaTextDisabled]}>
-                Send OTP
+                {authStatus === 'loading' ? 'Sending…' : 'Send OTP'}
               </Text>
             </TouchableOpacity>
 
@@ -352,6 +390,13 @@ const styles = StyleSheet.create({
     color: brand.helperColor,
     marginTop: 8,
     marginBottom: 24,
+  },
+  errorText: {
+    marginTop: 4,
+    marginBottom: 16,
+    fontSize: 12,
+    color: '#D14343',
+    fontWeight: '600',
   },
 
   ctaButton: {

@@ -1,4 +1,5 @@
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { loadUserProfile } from './userStorage';
 
 export type BusinessProfile = {
   storeName: string;
@@ -14,6 +15,9 @@ export type UserState = {
   displayName: string;
   phone: string;
   email: string;
+  role: string;
+  referenceCode: string;
+  profileComplete: boolean;
   /** True after user finishes Start Cashi onboarding */
   cashiBusiness: boolean;
   business: BusinessProfile | null;
@@ -21,12 +25,34 @@ export type UserState = {
 
 const initialState: UserState = {
   id: null,
-  displayName: 'Mohan',
-  phone: '+91 99999 00000',
-  email: 'mohan@example.com',
+  displayName: '',
+  phone: '',
+  email: '',
+  role: '',
+  referenceCode: '',
+  profileComplete: false,
   cashiBusiness: false,
   business: null,
 };
+
+export const bootstrapUserProfile = createAsyncThunk(
+  'user/bootstrapProfile',
+  async (_, thunkApi) => {
+    const profile = await loadUserProfile();
+    if (profile) {
+      thunkApi.dispatch(
+        setUser({
+          displayName: profile.displayName ?? undefined,
+          email: profile.email ?? undefined,
+          phone: profile.phone ?? undefined,
+          referenceCode: profile.referenceCode ?? undefined,
+          profileComplete: profile.profileComplete ?? undefined,
+        }),
+      );
+    }
+    return profile;
+  },
+);
 
 const userSlice = createSlice({
   name: 'user',
@@ -35,6 +61,9 @@ const userSlice = createSlice({
     /** Merge partial user — use after login / API */
     setUser(state, action: PayloadAction<Partial<UserState>>) {
       Object.assign(state, action.payload);
+    },
+    resetUser() {
+      return initialState;
     },
     completeStartCashi(state, action: PayloadAction<BusinessProfile>) {
       state.cashiBusiness = true;
@@ -48,5 +77,6 @@ const userSlice = createSlice({
   },
 });
 
-export const { setUser, completeStartCashi, clearBusiness } = userSlice.actions;
+export const { setUser, resetUser, completeStartCashi, clearBusiness } =
+  userSlice.actions;
 export const userReducer = userSlice.reducer;

@@ -6,8 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { HomeSideMenu } from '../components/HomeSideMenu';
 import { CouponsScreen } from '../screens/CouponsScreen';
-import { EarningsScreen } from '../screens/EarningsScreen';
 import { HomeScreen } from '../screens/HomeScreen';
+import { MyLoyaltyScreen } from '../screens/MyLoyaltyScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { brand } from '../theme';
 import { HomeMenuProvider, useHomeMenu } from './HomeMenuContext';
@@ -43,12 +43,10 @@ const CouponsIcon = ({ color }: { color: string }) => (
   </Svg>
 );
 
-/** Bar chart — earnings / growth */
-const EarningsIcon = ({ color }: { color: string }) => (
+/** Star/loyalty */
+const LoyaltyIcon = ({ color }: { color: string }) => (
   <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M18 20V10" />
-    <Path d="M12 20V4" />
-    <Path d="M6 20v-4" />
+    <Path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
   </Svg>
 );
 
@@ -119,13 +117,13 @@ export function MainTabNavigator() {
             }}
           />
           <Tab.Screen
-            name="Earnings"
-            component={EarningsScreen}
+            name="MyLoyalty"
+            component={MyLoyaltyScreen}
             options={{
-              tabBarLabel: 'Earnings',
+              tabBarLabel: 'My Loyalty',
               tabBarIcon: ({ color, focused }) => (
                 <IconWrapper focused={focused}>
-                  <EarningsIcon color={color} />
+                  <LoyaltyIcon color={color} />
                 </IconWrapper>
               ),
             }}

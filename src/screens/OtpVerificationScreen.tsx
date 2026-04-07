@@ -1,4 +1,4 @@
-import { CommonActions, useNavigation } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -17,11 +17,14 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { useKeyboardBottomInset } from '../hooks/useKeyboardBottomInset';
 import type {
   RootStackParamList,
   RootStackScreenProps,
 } from '../navigation/types';
 import { brand } from '../theme';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { requestOtp, verifyOtp } from '../store/authSlice';
 
 const OTP_LENGTH = 4;
 const { height: WINDOW_HEIGHT } = Dimensions.get('window');
@@ -30,8 +33,9 @@ type OtpNav = NativeStackNavigationProp<RootStackParamList, 'OtpVerification'>;
 
 function formatPhoneDisplay(digits: string) {
   const d = digits.replace(/\D/g, '');
-  if (d.length <= 5) return d;
-  return `${d.slice(0, 5)} ${d.slice(5, 10)}`;
+  const local = d.length === 12 && d.startsWith('91') ? d.slice(2) : d;
+  if (local.length <= 5) return local;
+  return `${local.slice(0, 5)} ${local.slice(5, 10)}`;
 }
 
 export function OtpVerificationScreen({
@@ -39,39 +43,57 @@ export function OtpVerificationScreen({
 }: RootStackScreenProps<'OtpVerification'>) {
   const navigation = useNavigation<OtpNav>();
   const insets = useSafeAreaInsets();
+  const dispatch = useAppDispatch();
+  const status = useAppSelector((s) => s.auth.status);
+  const error = useAppSelector((s) => s.auth.error);
+  const devOtp = useAppSelector((s) => s.auth.devOtp);
   const phoneDisplay = formatPhoneDisplay(route.params.phone);
+  const keyboardBottom = useKeyboardBottomInset();
 
   const [code, setCode] = useState('');
   const [isInputFocused, setIsInputFocused] = useState(true);
-  const [timeLeft, setTimeLeft] = useState(30);
+  const [timeLeft, setTimeLeft] = useState(32);
   const inputRef = useRef<TextInput>(null);
 
   const isComplete = code.length === OTP_LENGTH;
 
-  const cardMinHeight = WINDOW_HEIGHT - insets.top - 52;
+  const cardMinHeight = Math.max(
+    280,
+    WINDOW_HEIGHT - insets.top - 52 - keyboardBottom,
+  );
+
+  /** One automatic resend if backend still returned the old “staff account” rule (updated API allows staff). */
+  const staffBlockRetryDone = useRef(false);
+  useEffect(() => {
+    if (staffBlockRetryDone.current) return;
+    const err = (error ?? '').toLowerCase();
+    if (!err.includes('staff') && !err.includes('used by a staff')) return;
+    staffBlockRetryDone.current = true;
+    dispatch(requestOtp(route.params.phone));
+  }, [dispatch, error, route.params.phone]);
 
   useEffect(() => {
-    if (timeLeft === 0) return;
+    if (timeLeft === 0 || status === 'loading') return;
     const intervalId = setInterval(() => {
       setTimeLeft((prev) => prev - 1);
     }, 1000);
     return () => clearInterval(intervalId);
-  }, [timeLeft]);
+  }, [timeLeft, status]);
 
   const handleResend = () => {
-    setTimeLeft(30);
+    dispatch(requestOtp(route.params.phone));
+    setTimeLeft(32);
     setCode('');
     inputRef.current?.focus();
   };
 
-  const handleVerify = () => {
-    // Add verification API; on success:
-    navigation.dispatch(
-      CommonActions.reset({
-        index: 0,
-        routes: [{ name: 'Onboarding' }],
-      }),
-    );
+  const handleVerify = async () => {
+    if (!isComplete || status === 'loading') return;
+    try {
+      await dispatch(verifyOtp({ phone: route.params.phone, code })).unwrap();
+    } catch {
+      // Error text is in auth.error (unwrap rejects with rejectWithValue payload).
+    }
   };
 
   return (
@@ -81,10 +103,14 @@ export function OtpVerificationScreen({
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[
+            styles.scroll,
+            { paddingBottom: 16 + keyboardBottom },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          bounces={false}>
+          bounces={false}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}>
           <View style={styles.backRow}>
             <TouchableOpacity
               style={styles.backButton}
@@ -116,29 +142,31 @@ export function OtpVerificationScreen({
               </Text>
             </Text>
 
-            <View style={styles.otpContainer}>
-              <TextInput
-                ref={inputRef}
-                style={styles.hiddenInput}
-                value={code}
-                onChangeText={setCode}
-                maxLength={OTP_LENGTH}
-                keyboardType="number-pad"
-                textContentType="oneTimeCode"
-                autoFocus
-                onFocus={() => setIsInputFocused(true)}
-                onBlur={() => setIsInputFocused(false)}
-              />
-
+            {!!devOtp ? (
               <TouchableOpacity
-                style={styles.visualBoxesContainer}
-                activeOpacity={1}
-                onPress={() => inputRef.current?.focus()}>
+                activeOpacity={0.85}
+                onPress={() => setCode(devOtp)}
+                style={styles.devOtpPill}>
+                <Text style={styles.devOtpLabel}>OTP</Text>
+                <Text style={styles.devOtpValue}>{devOtp}</Text>
+                <Text style={styles.devOtpHint}>Tap to fill</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {!!error && <Text style={styles.errorText}>{error}</Text>}
+
+            {status === 'loading' && code.length === 0 ? (
+              <Text style={styles.sendingHint}>Sending your code…</Text>
+            ) : null}
+
+            <View style={styles.otpContainer}>
+              <View style={styles.otpBoxesRow}>
                 {Array(OTP_LENGTH)
                   .fill(0)
                   .map((_, index) => {
                     const digit = code[index] || '';
-                    const isCurrentBox = isInputFocused && code.length === index;
+                    const isCurrentBox =
+                      isInputFocused && code.length === index;
                     const isBoxFilled = digit !== '';
 
                     return (
@@ -153,16 +181,32 @@ export function OtpVerificationScreen({
                       </View>
                     );
                   })}
-              </TouchableOpacity>
+                <TextInput
+                  ref={inputRef}
+                  style={styles.otpInputOverlay}
+                  value={code}
+                  onChangeText={setCode}
+                  maxLength={OTP_LENGTH}
+                  keyboardType="number-pad"
+                  textContentType="oneTimeCode"
+                  autoFocus
+                  caretHidden
+                  {...(Platform.OS === 'android'
+                    ? { importantForAutofill: 'yes' as const }
+                    : {})}
+                  onFocus={() => setIsInputFocused(true)}
+                  onBlur={() => setIsInputFocused(false)}
+                />
+              </View>
             </View>
 
             <TouchableOpacity
               style={[styles.ctaButton, !isComplete && styles.ctaButtonDisabled]}
               activeOpacity={isComplete ? 0.85 : 1}
-              disabled={!isComplete}
+              disabled={!isComplete || status === 'loading'}
               onPress={handleVerify}>
               <Text style={[styles.ctaText, !isComplete && styles.ctaTextDisabled]}>
-                Verify & Continue
+                {status === 'loading' ? 'Verifying…' : 'Verify & Continue'}
               </Text>
             </TouchableOpacity>
 
@@ -265,20 +309,71 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
+  devOtpPill: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(59, 158, 232, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 158, 232, 0.22)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    marginTop: -22,
+    marginBottom: 18,
+  },
+  devOtpLabel: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: brand.blue,
+    letterSpacing: 1.3,
+  },
+  devOtpValue: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: brand.cardHeading,
+    letterSpacing: 2.2,
+  },
+  devOtpHint: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: brand.cardBody,
+  },
+  errorText: {
+    marginTop: 2,
+    marginBottom: 18,
+    fontSize: 12,
+    color: '#D14343',
+    fontWeight: '600',
+  },
+  sendingHint: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: brand.cardBody,
+    marginBottom: 16,
+    marginTop: -8,
+  },
 
   otpContainer: {
     marginBottom: 40,
   },
-  hiddenInput: {
-    position: 'absolute',
-    width: 1,
-    height: 1,
-    opacity: 0,
-  },
-  visualBoxesContainer: {
+  otpBoxesRow: {
+    position: 'relative',
     flexDirection: 'row',
     justifyContent: 'space-between',
     width: '100%',
+    minHeight: 72,
+  },
+  otpInputOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+    opacity: Platform.OS === 'android' ? 0.04 : 0.02,
+    color: 'transparent',
+    fontSize: 24,
+    padding: 0,
+    margin: 0,
+    textAlign: 'center',
   },
   otpBox: {
     width: 68,

@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 export type MainTabParamList = {
   Home: undefined;
   Coupons: undefined;
-  Earnings: undefined;
+  MyLoyalty: undefined;
   Settings: undefined;
 };
 
@@ -16,8 +16,6 @@ export type RootStackParamList = {
   MainTabs: undefined;
   /** Same UI as tab Coupons, pushed from side menu so back returns to Home */
   CouponsFromMenu: undefined;
-  /** Same UI as tab Earnings, pushed from side menu */
-  EarningsFromMenu: undefined;
   MyLoyalty: undefined;
   Notifications: undefined;
   Invite: undefined;
@@ -25,6 +23,8 @@ export type RootStackParamList = {
   EditProfile: undefined;
   StartCashiOnboarding: undefined;
   MerchantPortal: undefined;
+  WebPage: { title: string; url: string };
+  ShopsDirectory: undefined;
 };
 
 export type MainTabScreenProps<T extends keyof MainTabParamList> =

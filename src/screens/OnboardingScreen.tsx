@@ -2,6 +2,8 @@ import { CommonActions, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -14,22 +16,67 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../navigation/types';
+import { apiRequest } from '../api/client';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { setUser } from '../store/userSlice';
+import { saveUserProfile } from '../store/userStorage';
 import { brand } from '../theme';
 
 type OnboardingNav = NativeStackNavigationProp<RootStackParamList, 'Onboarding'>;
 
 export function OnboardingScreen() {
   const navigation = useNavigation<OnboardingNav>();
+  const dispatch = useAppDispatch();
+  const existing = useAppSelector((s) => s.user);
+  const accessToken = useAppSelector((s) => s.auth.accessToken);
 
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-  const [refCode, setRefCode] = useState('');
+  const [fullName, setFullName] = useState(existing.displayName ?? '');
+  const [email, setEmail] = useState(existing.email ?? '');
+  const [refCode, setRefCode] = useState(existing.referenceCode ?? '');
+  const [saving, setSaving] = useState(false);
 
   // Validation: Only Full Name is mandatory
   const isValid = fullName.trim().length >= 2;
 
-  const handleSave = () => {
-    // Add API logic to save the user profile, then:
+  const handleSave = async () => {
+    if (!isValid || saving) return;
+    if (!accessToken) {
+      Alert.alert('Session error', 'Please log in again.');
+      return;
+    }
+    const payload = {
+      displayName: fullName.trim(),
+      email: email.trim(),
+      referenceCode: refCode.trim(),
+      profileComplete: true,
+      phone: existing.phone,
+      id: existing.id,
+    };
+    setSaving(true);
+    try {
+      await apiRequest<{ id: string }>('/auth/customer/profile', {
+        method: 'POST',
+        token: accessToken,
+        body: {
+          name: payload.displayName,
+          ...(payload.email ? { email: payload.email } : {}),
+        },
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Could not save profile';
+      Alert.alert('Save failed', msg);
+      setSaving(false);
+      return;
+    }
+    dispatch(setUser(payload));
+    await saveUserProfile({
+      displayName: payload.displayName,
+      email: payload.email,
+      phone: existing.phone,
+      referenceCode: payload.referenceCode,
+      profileComplete: true,
+    });
+    setSaving(false);
     navigation.dispatch(
       CommonActions.reset({
         index: 0,
@@ -142,13 +189,21 @@ export function OnboardingScreen() {
             <View style={styles.spacer} />
 
             <TouchableOpacity
-              style={[styles.ctaButton, !isValid && styles.ctaButtonDisabled]}
-              activeOpacity={isValid ? 0.85 : 1}
-              // disabled={!isValid}
+              style={[
+                styles.ctaButton,
+                (!isValid || saving) && styles.ctaButtonDisabled,
+              ]}
+              activeOpacity={isValid && !saving ? 0.85 : 1}
+              disabled={!isValid || saving}
               onPress={handleSave}>
-              <Text style={[styles.ctaText, !isValid && styles.ctaTextDisabled]}>
-                Save & Continue
-              </Text>
+              {saving ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text
+                  style={[styles.ctaText, !isValid && styles.ctaTextDisabled]}>
+                  Save & Continue
+                </Text>
+              )}
             </TouchableOpacity>
 
           </View>

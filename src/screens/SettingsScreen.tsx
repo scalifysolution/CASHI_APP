@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   Alert,
-  Linking,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -9,12 +8,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { CommonActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
-import { STORE_SIGNUP_URL } from '../config/env';
-import { useAppSelector } from '../store/hooks';
+import { MERCHANT_PORTAL_URL } from '../config/env';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
+import { logout } from '../store/authSlice';
 
 // --- Professional Vector Icons ---
 const SettingIcon = ({ type, color = brand.cardHeading }: { type: string; color?: string }) => (
@@ -27,34 +26,65 @@ const SettingIcon = ({ type, color = brand.cardHeading }: { type: string; color?
   </Svg>
 );
 
+function withQueryParams(
+  url: string,
+  params: Record<string, string | undefined | null>,
+) {
+  const base = String(url || '').trim();
+  if (!base) return base;
+  const hashIdx = base.indexOf('#');
+  const beforeHash = hashIdx >= 0 ? base.slice(0, hashIdx) : base;
+  const hash = hashIdx >= 0 ? base.slice(hashIdx) : '';
+  const qs = Object.entries(params)
+    .filter(([, v]) => v != null && String(v).length > 0)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join('&');
+  if (!qs) return base;
+  const joiner = beforeHash.includes('?') ? '&' : '?';
+  return `${beforeHash}${joiner}${qs}${hash}`;
+}
+
 export function SettingsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
+  const dispatch = useAppDispatch();
   const cashiBusiness = useAppSelector((s) => s.user.cashiBusiness);
-
-  const resetToLogin = () => {
-    const parent = navigation.getParent?.() ?? navigation;
-    parent.dispatch(
-      CommonActions.reset({
-        index: 0,
-        routes: [{ name: 'Login' }],
-      }),
-    );
-  };
+  const role = useAppSelector((s) => s.user.role);
+  const displayName = useAppSelector((s) => s.user.displayName) || '—';
+  const email = useAppSelector((s) => s.user.email) || '—';
+  const token = useAppSelector((s) => s.auth.accessToken);
 
   const confirmLogout = () => {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: resetToLogin },
+      {
+        text: 'Log out',
+        style: 'destructive',
+        onPress: () => {
+          void dispatch(logout());
+        },
+      },
     ]);
   };
 
   const goRegisterSale = () => {
-    if (cashiBusiness) {
-      navigation.navigate('MerchantPortal');
-    } else {
-      Linking.openURL(STORE_SIGNUP_URL);
+    const base = (MERCHANT_PORTAL_URL || '').trim().replace(/\/+$/, '');
+    if (!base) {
+      Alert.alert('Missing URL', 'Set MERCHANT_PORTAL_URL in your .env file.');
+      return;
     }
+    const isUser = String(role || '').toUpperCase() === 'USER' || !role;
+    const rawUrl = isUser ? `${base}/register` : `${base}`;
+    const url = withQueryParams(rawUrl, {
+      token,
+      action: isUser ? 'REGISTER_ON_CASHI' : 'REGISTER_SALE',
+    });
+    navigation.navigate('WebPage', {
+      title: isUser ? 'Start Cashi' : 'Register Sale',
+      url,
+    });
   };
+
+  // Delete account is handled under Personal Information (not shown here).
 
   const SettingTile = ({ label, sub, icon, onPress }: any) => (
     <TouchableOpacity style={styles.tile} onPress={onPress} activeOpacity={0.7}>
@@ -80,11 +110,13 @@ export function SettingsScreen({ navigation }: any) {
         {/* Profile Quick Card */}
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>M</Text>
+            <Text style={styles.avatarText}>
+              {(displayName?.trim()?.[0] ?? 'C').toUpperCase()}
+            </Text>
           </View>
           <View style={styles.profileInfo}>
-            <Text style={styles.profileName}>Mohan Singh</Text>
-            <Text style={styles.profileEmail}>singhmohan333@gmail.com</Text>
+            <Text style={styles.profileName}>{displayName}</Text>
+            <Text style={styles.profileEmail}>{email}</Text>
           </View>
           <TouchableOpacity 
             style={styles.editBtn} 
@@ -108,9 +140,13 @@ export function SettingsScreen({ navigation }: any) {
               </Svg>
             </View>
             <View style={styles.storeCtaTextBlock}>
-              <Text style={styles.storeCtaTitle}>{cashiBusiness ? 'Register sale' : 'Start Cashi on your Store'}</Text>
+              <Text style={styles.storeCtaTitle}>
+                {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Start Cashi on your Store' : 'Register sale'}
+              </Text>
               <Text style={styles.storeCtaSub}>
-                {cashiBusiness ? 'Open the merchant portal to record a sale' : 'Opens the store signup page in your browser'}
+                {(String(role || '').toUpperCase() === 'USER' || !role)
+                  ? 'Opens registration inside the app'
+                  : 'Open the merchant portal to record a sale'}
               </Text>
             </View>
             <View style={styles.storeCtaChevron} />
@@ -125,23 +161,11 @@ export function SettingsScreen({ navigation }: any) {
               icon="user" 
               onPress={() => navigation.navigate('EditProfile')}
             />
-            <View style={styles.divider} />
-            <SettingTile 
-              label="Security & Password" 
-              sub="Biometrics, PIN, Login history" 
-              icon="security" 
-            />
           </View>
 
           {/* Section: App Preferences */}
           <Text style={styles.sectionLabel}>PREFERENCES</Text>
           <View style={styles.group}>
-            <SettingTile 
-              label="Notifications" 
-              sub="Alerts, Rewards, Store updates" 
-              icon="bell" 
-            />
-            <View style={styles.divider} />
             <SettingTile 
               label="Privacy Policy" 
               sub="How we handle your data" 
@@ -162,6 +186,7 @@ export function SettingsScreen({ navigation }: any) {
           <TouchableOpacity style={styles.logoutBtn} onPress={confirmLogout} activeOpacity={0.85}>
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
+
 
           <Text style={styles.versionText}>CASHI v1.1.6 BETA</Text>
         </ScrollView>

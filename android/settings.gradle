@@ -1,5 +1,18 @@
 pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
 plugins { id("com.facebook.react.settings") }
+
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+  repositories {
+    google()
+    mavenCentral()
+    // React Native AARs
+    maven { url("$rootDir/../node_modules/react-native/android") }
+    // Some RN libs publish here
+    maven { url("https://www.jitpack.io") }
+  }
+}
+
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'Cashi'
 include ':app'

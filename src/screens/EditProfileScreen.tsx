@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Linking,
   Platform,
   ScrollView,
   StatusBar,
@@ -15,7 +14,6 @@ import {
 import { CommonActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
-import { STORE_SIGNUP_URL } from '../config/env';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { setUser } from '../store/userSlice';
 import { brand } from '../theme';
@@ -42,7 +40,7 @@ const FieldIcon = ({ type }: { type: 'user' | 'phone' | 'mail' }) => (
 export function EditProfileScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const dispatch = useAppDispatch();
-  const { displayName, phone: userPhone, email: userEmail, cashiBusiness } = useAppSelector((s) => s.user);
+  const { displayName, phone: userPhone, email: userEmail } = useAppSelector((s) => s.user);
 
   const [form, setForm] = useState({
     name: displayName,
@@ -83,14 +81,6 @@ export function EditProfileScreen({ navigation }: any) {
         { text: 'Delete', style: 'destructive', onPress: resetToLogin },
       ],
     );
-  };
-
-  const goRegisterSale = () => {
-    if (cashiBusiness) {
-      navigation.navigate('MerchantPortal');
-    } else {
-      Linking.openURL(STORE_SIGNUP_URL);
-    }
   };
 
   return (
