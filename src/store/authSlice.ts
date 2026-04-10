@@ -4,6 +4,7 @@ import { ApiException } from '../api/http';
 import { clearAccessToken, loadAccessToken, saveAccessToken } from './authStorage';
 import { resetUser, setUser, type UserState } from './userSlice';
 import { clearUserProfile, loadUserProfile, saveUserProfile } from './userStorage';
+import { flattenMeResponse } from '../utils/mePayload';
 
 type TokenResponse = {
   accessToken: string;
@@ -126,15 +127,22 @@ export const fetchMe = createAsyncThunk<
     throw e;
   }
   if (me && typeof me === 'object') {
-    const id = (me as any).sub ?? (me as any).id ?? null;
-    const email = (me as any).email ?? '';
-    const role = String((me as any).role ?? '').toUpperCase();
-    const phone = String((me as any).phone ?? '').trim();
-    const name = String((me as any).name ?? '').trim();
+    const p = flattenMeResponse(me);
+    const id = (p.sub ?? p.id) as string | null | undefined;
+    const email = String(p.email ?? '');
+    const role = String(p.role ?? '').toUpperCase();
+    const phone = String(p.phone ?? '').trim();
+    const name = String(p.name ?? '').trim();
+    const rawReferral = p.referralCode ?? p.referral_code;
+    const referralFromServer =
+      rawReferral !== undefined && rawReferral !== null
+        ? String(rawReferral).trim()
+        : '';
 
-    const updates: Partial<UserState> = { id, email };
+    const updates: Partial<UserState> = { id: id ?? null, email };
     if (role) updates.role = role;
     if (phone) updates.phone = phone;
+    if (referralFromServer) updates.referenceCode = referralFromServer;
     if (name.length >= 2) {
       updates.displayName = name;
       updates.profileComplete = true;
@@ -144,7 +152,7 @@ export const fetchMe = createAsyncThunk<
 
     if (name.length >= 2) {
       const st = thunkApi.getState() as { user?: UserState };
-      const ref = st?.user?.referenceCode ?? '';
+      const ref = referralFromServer || st?.user?.referenceCode || '';
       const phoneForStore = phone || st?.user?.phone || '';
       await saveUserProfile({
         displayName: name,
@@ -152,6 +160,15 @@ export const fetchMe = createAsyncThunk<
         phone: phoneForStore,
         referenceCode: ref,
         profileComplete: true,
+      });
+    } else if (referralFromServer) {
+      const st = thunkApi.getState() as { user?: UserState };
+      await saveUserProfile({
+        displayName: st?.user?.displayName,
+        email: st?.user?.email ?? email,
+        phone: phone || st?.user?.phone || '',
+        referenceCode: referralFromServer,
+        profileComplete: st?.user?.profileComplete ?? false,
       });
     }
   }

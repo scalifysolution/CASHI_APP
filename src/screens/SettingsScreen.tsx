@@ -26,24 +26,6 @@ const SettingIcon = ({ type, color = brand.cardHeading }: { type: string; color?
   </Svg>
 );
 
-function withQueryParams(
-  url: string,
-  params: Record<string, string | undefined | null>,
-) {
-  const base = String(url || '').trim();
-  if (!base) return base;
-  const hashIdx = base.indexOf('#');
-  const beforeHash = hashIdx >= 0 ? base.slice(0, hashIdx) : base;
-  const hash = hashIdx >= 0 ? base.slice(hashIdx) : '';
-  const qs = Object.entries(params)
-    .filter(([, v]) => v != null && String(v).length > 0)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-    .join('&');
-  if (!qs) return base;
-  const joiner = beforeHash.includes('?') ? '&' : '?';
-  return `${beforeHash}${joiner}${qs}${hash}`;
-}
-
 export function SettingsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const dispatch = useAppDispatch();
@@ -51,7 +33,9 @@ export function SettingsScreen({ navigation }: any) {
   const role = useAppSelector((s) => s.user.role);
   const displayName = useAppSelector((s) => s.user.displayName) || '—';
   const email = useAppSelector((s) => s.user.email) || '—';
-  const token = useAppSelector((s) => s.auth.accessToken);
+
+  const PRIVACY_URL = 'https://cashi.in/privacy.html';
+  const FAQ_URL = 'https://cashi.in/#faq';
 
   const confirmLogout = () => {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
@@ -72,16 +56,8 @@ export function SettingsScreen({ navigation }: any) {
       Alert.alert('Missing URL', 'Set MERCHANT_PORTAL_URL in your .env file.');
       return;
     }
-    const isUser = String(role || '').toUpperCase() === 'USER' || !role;
-    const rawUrl = isUser ? `${base}/register` : `${base}`;
-    const url = withQueryParams(rawUrl, {
-      token,
-      action: isUser ? 'REGISTER_ON_CASHI' : 'REGISTER_SALE',
-    });
-    navigation.navigate('WebPage', {
-      title: isUser ? 'Start Cashi' : 'Register Sale',
-      url,
-    });
+    // Always open the dedicated MerchantPortal WebView so we can inject the app token.
+    navigation.navigate('MerchantPortal');
   };
 
   // Delete account is handled under Personal Information (not shown here).
@@ -170,6 +146,7 @@ export function SettingsScreen({ navigation }: any) {
               label="Privacy Policy" 
               sub="How we handle your data" 
               icon="privacy" 
+              onPress={() => navigation.navigate('WebPage', { title: 'Privacy Policy', url: PRIVACY_URL })}
             />
           </View>
 
@@ -180,6 +157,7 @@ export function SettingsScreen({ navigation }: any) {
               label="Help & FAQ" 
               sub="Get help with your account" 
               icon="help" 
+              onPress={() => navigation.navigate('WebPage', { title: 'Help & FAQ', url: FAQ_URL })}
             />
           </View>
 

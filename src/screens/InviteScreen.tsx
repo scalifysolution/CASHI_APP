@@ -1,5 +1,9 @@
-import React from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import React, { useCallback } from 'react';
 import {
+  Alert,
+  Linking,
+  Share,
   StatusBar,
   StyleSheet,
   Text,
@@ -10,15 +14,81 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { brand } from '../theme';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { fetchMe } from '../store/authSlice';
+import { setUser, type UserState } from '../store/userSlice';
+import { saveUserProfile } from '../store/userStorage';
+import { flattenMeResponse } from '../utils/mePayload';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Invite'>;
 };
 
-const REFERRAL_CODE = 'CASHI-ABH12';
+const DOWNLOAD_URL = 'https://console.shopview.net/web/download_cashi';
 
 export function InviteScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const dispatch = useAppDispatch();
+  const store = useStore();
+  const accessToken = useAppSelector((s) => s.auth.accessToken);
+  const referralCode = useAppSelector((s) => s.user.referenceCode);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!accessToken) return;
+      void dispatch(fetchMe(accessToken))
+        .unwrap()
+        .then((raw) => {
+          const p = flattenMeResponse(raw);
+          const r = p.referralCode ?? p.referral_code;
+          if (typeof r === 'string' && r.trim().length > 0) {
+            const code = r.trim();
+            dispatch(setUser({ referenceCode: code }));
+            const u = (store.getState() as { user: UserState }).user;
+            void saveUserProfile({
+              displayName: u.displayName,
+              email: u.email,
+              phone: u.phone,
+              referenceCode: code,
+              profileComplete: u.profileComplete,
+            });
+          }
+        })
+        .catch(() => {});
+    }, [accessToken, dispatch]),
+  );
+
+  const shareInvite = async () => {
+    if (!referralCode?.trim()) {
+      Alert.alert(
+        'Referral code',
+        'We could not load your code yet. Pull to refresh on Home or sign in again.',
+      );
+      return;
+    }
+    const code = referralCode.trim();
+    const message = `Please download the Cashi app using this link:\n${DOWNLOAD_URL}\n\nUse my referral code: ${code}\n\nYou will get 500 points and I will also receive 500 points when you sign up using this referral code.`;
+    try {
+      // Prefer WhatsApp with prefilled message.
+      const encoded = encodeURIComponent(message);
+      try {
+        await Linking.openURL(`whatsapp://send?text=${encoded}`);
+        return;
+      } catch {
+        // Fallback: opens WhatsApp if installed, else browser.
+        await Linking.openURL(`https://wa.me/?text=${encoded}`);
+        return;
+      }
+    } catch {
+      // Fallback to native share sheet
+      try {
+        await Share.share({ message, title: 'Invite to Cashi' });
+      } catch {
+        // ignore
+      }
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -36,7 +106,7 @@ export function InviteScreen({ navigation }: Props) {
           <View style={styles.placeholder} />
         </View>
 
-        <Text style={styles.heroLine}>Invite friends.{'\n'}You both earn rewards.</Text>
+        <Text style={styles.heroLine}>Invite friends.{'\n'}Get rewarded.</Text>
       </View>
 
       <View style={styles.sheet}>
@@ -44,12 +114,18 @@ export function InviteScreen({ navigation }: Props) {
         <View style={[styles.body, { paddingBottom: insets.bottom + 32 }]}>
           <Text style={styles.label}>Your referral code</Text>
           <View style={styles.codeBox}>
-            <Text style={styles.codeText}>{REFERRAL_CODE}</Text>
+            <Text style={styles.codeText} selectable>
+              {referralCode?.trim() ? referralCode.trim() : '—'}
+            </Text>
           </View>
           <Text style={styles.hint}>
-            When a friend joins with your code, you earn bonus coins and they get a welcome perk.
+            Share your code on WhatsApp. When your friend signs up with it, you both get 500 points.
           </Text>
-          <TouchableOpacity activeOpacity={0.9} style={styles.shareBtn}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={[styles.shareBtn, !referralCode?.trim() && styles.shareBtnDisabled]}
+            onPress={shareInvite}
+            disabled={!referralCode?.trim()}>
             <Text style={styles.shareBtnText}>Share invite</Text>
           </TouchableOpacity>
         </View>
@@ -150,6 +226,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 16,
     alignItems: 'center',
+  },
+  shareBtnDisabled: {
+    opacity: 0.45,
   },
   shareBtnText: { color: brand.surface, fontSize: 16, fontWeight: '800' },
 });

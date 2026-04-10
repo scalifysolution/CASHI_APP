@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Dimensions,
   FlatList,
   Image,
   RefreshControl,
@@ -8,7 +9,6 @@ import {
   Text,
   TouchableOpacity,
   View,
-  Dimensions,
 } from 'react-native';
 import { useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,8 +17,10 @@ import { useAppSelector } from '../store/hooks';
 import { apiRequest } from '../api/client';
 import { API_BASE_URL } from '../config/env';
 
-const { width } = Dimensions.get('window');
-const COLUMN_WIDTH = (width - 60) / 2; // Precise grid calculation
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const HORIZONTAL_PADDING = 20;
+const COLUMN_GAP = 12;
+const COLUMN_WIDTH = (SCREEN_WIDTH - HORIZONTAL_PADDING * 2 - COLUMN_GAP) / 2;
 
 type CouponItem = {
   assignmentId: string;
@@ -52,7 +54,6 @@ function assetUrl(pathOrUrl: string | null) {
   if (!pathOrUrl) return null;
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
   if (!pathOrUrl.startsWith('/')) return pathOrUrl;
-  // API_BASE_URL includes /api, but uploads are served from the root.
   const origin = API_BASE_URL.replace(/\/+$/, '').replace(/\/api$/, '');
   return `${origin}${pathOrUrl}`;
 }
@@ -66,9 +67,10 @@ function daysLeft(expiresAt: string | null) {
 export function CouponsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const route = useRoute();
-  const showBack = route.name === 'CouponsFromMenu';
+  const showBack = route.name === 'CouponsFromMenu' || navigation.canGoBack();
   const [activeTab, setActiveTab] = useState('Active');
   const token = useAppSelector((s) => s.auth.accessToken);
+  
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,63 +110,101 @@ export function CouponsScreen({ navigation }: any) {
     return data.active;
   }, [activeTab, data.active, data.expired, data.used]);
 
-  const headerText = useMemo(() => {
-    // Keep the "no coupons" message only in ListEmptyComponent (below),
-    // so we don't show it twice (top + content).
-    if (loading) return '';
-    if (error) return '';
-    if (list.length === 0) return '';
-    return `${list.length} ${activeTab.toLowerCase()} coupon${list.length === 1 ? '' : 's'}`;
-  }, [activeTab, error, list.length, loading]);
-
   const renderCoupon = ({ item }: { item: CouponItem }) => {
     const c = item.coupon;
-    const title = c?.title ?? 'Coupon';
+    const title = c?.title ?? 'Partner Store';
     const img = assetUrl(c?.imageUrl ?? null);
     const dleft = daysLeft(c?.expiresAt ?? null);
-    const badge =
-      activeTab === 'Used'
-        ? 'Used'
-        : activeTab === 'Expired'
-          ? 'Expired'
-          : dleft == null
-            ? 'No expiry'
-            : dleft <= 0
-              ? 'Expires today'
-              : `${dleft} days left`;
+    
+    // --- Discount Value ---
+    const isPercent = c?.valueType === 'PERCENTAGE' && c?.valuePercent;
+    const isFixed = c?.valueType === 'FIXED' && c?.valueFixed;
+    
+    let highlightText = 'Reward';
+    if (isPercent) highlightText = `${c.valuePercent}% OFF`;
+    else if (isFixed) highlightText = `₹${c.valueFixed} OFF`;
 
-    const initial = title.trim()?.[0]?.toUpperCase() ?? 'C';
+    // --- Status & Expiry ---
+    let statusText = '';
+    let statusColor = '#111827'; // Dark gray by default
+    
+    if (activeTab === 'Used') {
+      statusText = 'Redeemed';
+      statusColor = '#10B981'; // Green
+    } else if (activeTab === 'Expired') {
+      statusText = 'Expired';
+      statusColor = '#9CA3AF'; // Light Gray
+    } else {
+      if (dleft == null) {
+        statusText = 'No expiry';
+      } else if (dleft < 0) {
+        statusText = 'Expired';
+        statusColor = '#EF4444';
+      } else if (dleft === 0) {
+        statusText = 'Expires today';
+        statusColor = '#EF4444'; 
+      } else if (dleft <= 3) {
+        statusText = `${dleft} days left`;
+        statusColor = '#F59E0B'; 
+      } else {
+        statusText = `${dleft} days left`;
+      }
+    }
+
+    const initial = title.trim()?.[0]?.toUpperCase() ?? 'S';
+    const rootNav = navigation?.getParent?.() ?? navigation;
+    const isInactive = activeTab !== 'Active';
 
     return (
-    <TouchableOpacity activeOpacity={0.9} style={styles.couponCard}>
-      {/* Expiry Badge */}
-      <View style={styles.expiryBadge}>
-        <Text style={styles.expiryText}>{badge}</Text>
-      </View>
+      <TouchableOpacity
+        activeOpacity={0.9}
+        style={[styles.gridCard, isInactive && styles.gridCardInactive]}
+        onPress={() => {
+          if (activeTab === 'Active') {
+            rootNav?.navigate?.('CouponPass', { item });
+          }
+        }}
+      >
+        {/* TOP: PERFECT IMAGE AREA */}
+        <View style={styles.imageWrap}>
+          {img ? (
+            <Image
+              source={{ uri: img }}
+              style={styles.cardImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <Text style={styles.imageFallback}>{initial}</Text>
+          )}
+          <View style={styles.imageOverlay} />
+        </View>
 
-      {/* Logo Container */}
-      <View style={styles.logoContainer}>
-        {img ? (
-          <Image
-            source={{ uri: img }}
-            style={styles.brandImage}
-            resizeMode="cover"
-          />
-        ) : (
-          <Text style={styles.initialText}>{initial}</Text>
-        )}
-      </View>
+        {/* BOTTOM: HIGHLY ORGANIZED DETAILS */}
+        <View style={styles.detailsWrap}>
+          
+          <Text style={styles.brandName} numberOfLines={1}>{title}</Text>
+          <Text style={styles.hugeDiscount} numberOfLines={1} adjustsFontSizeToFit>
+            {highlightText}
+          </Text>
 
-      {/* Brand Info */}
-      <View style={styles.cardFooter}>
-        <Text style={styles.brandName} numberOfLines={1}>
-          {title}
-        </Text>
-        <Text style={styles.offerText} numberOfLines={1}>
-          {c?.shortDescription ?? 'Tap to view'}
-        </Text>
-      </View>
-    </TouchableOpacity>
+          {/* DEDICATED TERMS BOX */}
+          <View style={styles.termsBox}>
+            <View style={styles.termRow}>
+              <Text style={styles.termLabel}>Min Order</Text>
+              <Text style={styles.termValue}>
+                {c?.minOrderValue ? `₹${c.minOrderValue}` : 'None'}
+              </Text>
+            </View>
+            <View style={styles.termRowLast}>
+              <Text style={styles.termLabel}>Status</Text>
+              <Text style={[styles.termValue, { color: statusColor }]}>
+                {statusText}
+              </Text>
+            </View>
+          </View>
+
+        </View>
+      </TouchableOpacity>
     );
   };
 
@@ -172,7 +212,7 @@ export function CouponsScreen({ navigation }: any) {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={brand.dark} />
       
-      {/* --- PREMIUM HEADER --- */}
+      {/* HEADER */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <View style={styles.headerRow}>
           {showBack ? (
@@ -182,279 +222,232 @@ export function CouponsScreen({ navigation }: any) {
           ) : (
             <View style={styles.backBtnPlaceholder} />
           )}
-          <Text style={styles.headerTitle}>My Coupons</Text>
+          <Text style={styles.headerTitle}>My Vouchers</Text>
           <View style={styles.placeholder} />
         </View>
 
-        {/* --- CATEGORY TABS --- */}
+        {/* SEGMENTED TABS */}
         <View style={styles.tabContainer}>
-          {['Active', 'Used', 'Expired'].map((tab) => (
-            <TouchableOpacity 
-              key={tab} 
-              onPress={() => setActiveTab(tab)}
-              style={[styles.tab, activeTab === tab && styles.activeTab]}
-            >
-              <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
-                {tab}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {['Active', 'Used', 'Expired'].map((tab) => {
+            const isActive = activeTab === tab;
+            return (
+              <TouchableOpacity 
+                key={tab} 
+                onPress={() => setActiveTab(tab)}
+                activeOpacity={0.8}
+                style={[styles.tab, isActive && styles.activeTab]}
+              >
+                <Text style={[styles.tabText, isActive && styles.activeTabText]}>
+                  {tab}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
 
-      {/* --- COUPONS GRID --- */}
-      <FlatList
-        data={list}
-        renderItem={renderCoupon}
-        keyExtractor={(item) => item.assignmentId}
-        numColumns={2}
-        contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 100 }]}
-        showsVerticalScrollIndicator={false}
-        columnWrapperStyle={styles.row}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => load('refresh')}
-            tintColor={brand.blue}
-          />
-        }
-        ListHeaderComponent={() =>
-          headerText ? <Text style={styles.countText}>{headerText}</Text> : null
-        }
-        ListEmptyComponent={() => {
-          if (loading) return null;
-          if (error) {
+      {/* 2-COLUMN GRID LIST */}
+      <View style={styles.sheetContainer}>
+        <FlatList
+          data={list}
+          renderItem={renderCoupon}
+          keyExtractor={(item) => item.assignmentId}
+          numColumns={2} 
+          columnWrapperStyle={styles.row} 
+          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 40 }]}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => load('refresh')}
+              tintColor={brand.blue}
+            />
+          }
+          ListHeaderComponent={() => (
+             !loading && !error && list.length > 0 ? (
+               <Text style={styles.countText}>
+                 {list.length} {activeTab.toLowerCase()} voucher{list.length === 1 ? '' : 's'}
+               </Text>
+             ) : null
+          )}
+          ListEmptyComponent={() => {
+            if (loading) return null;
+            if (error) {
+              return (
+                <View style={styles.emptyWrap}>
+                  <Text style={styles.emptyTitle}>Couldn’t load vouchers</Text>
+                  <Text style={styles.emptySub}>
+                    Please check your internet connection and try again.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.emptyBtn}
+                    onPress={() => load('refresh')}
+                    activeOpacity={0.9}>
+                    <Text style={styles.emptyBtnText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            }
             return (
               <View style={styles.emptyWrap}>
-                <Text style={styles.emptyTitle}>Couldn’t load coupons</Text>
-                <Text style={styles.emptySub}>
-                  Check your connection and try again.
+                <View style={styles.emptyIconPlaceholder}>
+                   <View style={styles.emptyShape} />
+                </View>
+                <Text style={styles.emptyTitle}>
+                  {activeTab === 'Used'
+                    ? 'No used vouchers'
+                    : activeTab === 'Expired'
+                      ? 'No expired vouchers'
+                      : 'No active vouchers'}
                 </Text>
-                <TouchableOpacity
-                  style={styles.emptyBtn}
-                  onPress={() => load('refresh')}
-                  activeOpacity={0.9}>
-                  <Text style={styles.emptyBtnText}>Retry</Text>
-                </TouchableOpacity>
+                <Text style={styles.emptySub}>
+                  {activeTab === 'Active'
+                    ? 'Shop at our partner stores to earn exclusive rewards and cashback vouchers.'
+                    : activeTab === 'Used'
+                      ? 'Vouchers you have successfully redeemed will appear in this history.'
+                      : 'Vouchers that have crossed their validity period will move here.'}
+                </Text>
               </View>
             );
-          }
-          return (
-            <View style={styles.emptyWrap}>
-              <Text style={styles.emptyTitle}>
-                {activeTab === 'Used'
-                  ? 'No used coupons yet'
-                  : activeTab === 'Expired'
-                    ? 'No expired coupons'
-                    : 'No active coupons yet'}
-              </Text>
-              <Text style={styles.emptySub}>
-                {activeTab === 'Active'
-                  ? 'Earn coupons when you shop at partner stores. They’ll appear here automatically.'
-                  : activeTab === 'Used'
-                    ? 'Once you redeem a coupon, it will show up here.'
-                    : 'When a coupon expires, it will move here.'}
-              </Text>
-            </View>
-          );
-        }}
-      />
+          }}
+        />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: brand.dark, // Matching your professional theme
-  },
-  header: {
-    backgroundColor: brand.dark,
-    paddingHorizontal: 24,
-    paddingBottom: 20,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 25,
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  arrow: {
-    width: 10,
-    height: 10,
-    borderLeftWidth: 2,
-    borderTopWidth: 2,
-    borderColor: brand.surface,
-    transform: [{ rotate: '-45deg' }],
-    marginLeft: 4,
-  },
-  headerTitle: {
-    color: brand.surface,
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-  },
+  container: { flex: 1, backgroundColor: brand.dark },
+  
+  // Header
+  header: { backgroundColor: brand.dark, paddingHorizontal: HORIZONTAL_PADDING, paddingBottom: 20 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 },
+  backBtn: { width: 40, height: 40, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
+  arrow: { width: 10, height: 10, borderLeftWidth: 2, borderTopWidth: 2, borderColor: brand.surface, transform: [{ rotate: '-45deg' }], marginLeft: 4 },
+  headerTitle: { color: brand.surface, fontSize: 18, fontWeight: '700', letterSpacing: -0.2 },
   placeholder: { width: 40 },
   backBtnPlaceholder: { width: 40, height: 40 },
 
   // Tabs
-  tabContainer: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 14,
-    padding: 4,
-  },
-  tab: {
+  tabContainer: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 8, padding: 3 },
+  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 6 },
+  activeTab: { backgroundColor: brand.surface, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  tabText: { color: 'rgba(255,255,255,0.6)', fontSize: 13, fontWeight: '600' },
+  activeTabText: { color: brand.dark, fontWeight: '700' },
+
+  // Sheet Area
+  sheetContainer: {
     flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 10,
-  },
-  activeTab: {
-    backgroundColor: brand.blue,
-  },
-  tabText: {
-    color: brand.heroBody,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  activeTabText: {
-    color: brand.surface,
-  },
-
-  // Grid
-  listContent: {
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    backgroundColor: brand.background,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    flexGrow: 1,
-  },
-  row: {
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  countText: {
-    fontSize: 13,
-    color: brand.cardBody,
-    fontWeight: '600',
-    marginBottom: 20,
-  },
-  emptyWrap: {
-    marginTop: 8,
-    paddingVertical: 26,
-    paddingHorizontal: 18,
-    backgroundColor: brand.surface,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: brand.inputBg,
-    alignItems: 'center',
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: brand.cardHeading,
-    letterSpacing: -0.2,
-    textAlign: 'center',
-  },
-  emptySub: {
-    marginTop: 8,
-    fontSize: 12,
-    fontWeight: '600',
-    color: brand.cardBody,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
-  emptyBtn: {
-    marginTop: 14,
-    height: 42,
-    paddingHorizontal: 18,
-    borderRadius: 14,
-    backgroundColor: brand.blue,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyBtnText: {
-    color: brand.surface,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-
-  // Card Design
-  couponCard: {
-    width: COLUMN_WIDTH,
-    backgroundColor: brand.surface,
-    borderRadius: 24,
-    padding: 12,
-    alignItems: 'center',
-    // Premium Shadow
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.035,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  expiryBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    zIndex: 2,
-  },
-  expiryText: {
-    color: brand.surface,
-    fontSize: 9,
-    fontWeight: '800',
-  },
-  logoContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: brand.inputBg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 20,
-    marginBottom: 15,
+    backgroundColor: '#F8F9FB', 
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
     overflow: 'hidden',
   },
-  brandImage: {
-    width: 80,
-    height: 80,
+  listContent: { paddingHorizontal: HORIZONTAL_PADDING, paddingTop: 24, flexGrow: 1 },
+  countText: { fontSize: 12, color: '#8A94A6', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 16 },
+
+  // Empty State
+  emptyWrap: { marginTop: 40, alignItems: 'center', paddingHorizontal: 24, width: '100%' },
+  emptyIconPlaceholder: { width: 64, height: 64, borderRadius: 16, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', marginBottom: 20, shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 8, elevation: 1, borderWidth: 1, borderColor: '#E8EAED' },
+  emptyShape: { width: 24, height: 16, borderRadius: 4, borderWidth: 1.5, borderColor: '#C4C9D4', borderStyle: 'solid' },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#1A1D26', textAlign: 'center' },
+  emptySub: { marginTop: 8, fontSize: 13, fontWeight: '500', color: '#6B7280', lineHeight: 20, textAlign: 'center' },
+  emptyBtn: { marginTop: 24, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8, backgroundColor: brand.dark, alignItems: 'center', justifyContent: 'center' },
+  emptyBtnText: { color: brand.surface, fontSize: 13, fontWeight: '700' },
+
+  // --- GRID CARDS ---
+  row: {
+    justifyContent: 'space-between',
+    marginBottom: COLUMN_GAP,
   },
-  initialText: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: brand.cardHeading,
+  gridCard: {
+    width: COLUMN_WIDTH,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 2,
+    overflow: 'hidden',
   },
-  cardFooter: {
+  gridCardInactive: {
+    opacity: 0.6,
+  },
+
+  // TOP: PERFECT IMAGE
+  imageWrap: {
     width: '100%',
+    height: 120, 
+    backgroundColor: '#F3F4F6',
     alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: brand.inputBg,
-    paddingTop: 12,
-    paddingBottom: 4,
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8EAED',
+  },
+  cardImage: {
+    width: '100%',
+    height: '100%',
+  },
+  imageFallback: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#D1D5DB',
+  },
+  imageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.02)',
+  },
+
+  // BOTTOM: ORGANIZED DETAILS
+  detailsWrap: {
+    padding: 12,
   },
   brandName: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: brand.cardHeading,
-  },
-  offerText: {
-    fontSize: 11,
-    color: brand.blue,
+    fontSize: 10,
     fontWeight: '700',
-    marginTop: 2,
+    color: brand.blue, // Gives the brand name a nice pop
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  hugeDiscount: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#111827',
+    letterSpacing: -0.5,
+    marginBottom: 10,
+  },
+
+  // ORGANIZED TERMS BOX (Min Order & Expiry)
+  termsBox: {
+    backgroundColor: '#F8F9FB', // Light gray background to separate rules
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#F0F1F5',
+  },
+  termRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4, // Spacing between the two rules
+  },
+  termRowLast: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  termLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  termValue: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#111827',
   },
 });

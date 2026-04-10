@@ -14,6 +14,9 @@ import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { OtpVerificationScreen } from '../screens/OtpVerificationScreen';
 import { CouponsScreen } from '../screens/CouponsScreen';
 import { ShopsDirectoryScreen } from '../screens/ShopsDirectoryScreen';
+import { CouponPassScreen } from '../screens/CouponPassScreen';
+import { ShopDetailScreen } from '../screens/ShopDetailScreenFixed';
+import { ScannerScreen } from '../screens/ScannerScreen';
 import type { RootStackParamList } from './types';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { bootstrapAuth } from '../store/authSlice';
@@ -72,6 +75,11 @@ export function RootNavigator() {
             options={{ headerShown: false }}
           />
           <Stack.Screen
+            name="CouponPass"
+            component={CouponPassScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
             name="MyLoyalty"
             component={MyLoyaltyScreen}
             options={{ headerShown: false }}
@@ -114,6 +122,16 @@ export function RootNavigator() {
           <Stack.Screen
             name="ShopsDirectory"
             component={ShopsDirectoryScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="ShopDetail"
+            component={ShopDetailScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Scanner"
+            component={ScannerScreen}
             options={{ headerShown: false }}
           />
         </>

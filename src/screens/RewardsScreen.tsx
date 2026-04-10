@@ -1,125 +1,288 @@
-import React, { useState } from 'react';
+// @refresh reset
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
+  Image,
+  RefreshControl,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  Dimensions,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path, Circle } from 'react-native-svg';
+import Svg, { Path, Circle, Rect } from 'react-native-svg';
+import { apiRequest } from '../api/client';
+import { API_BASE_URL } from '../config/env';
+import { useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
 
-const { width } = Dimensions.get('window');
-const COLUMN_WIDTH = (width - 60) / 2; // Precise 2-column math
-
-// --- Professional SVG Vector Icons ---
-const StopwatchIcon = ({ color }: { color: string }) => (
-  <Svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <Circle cx="12" cy="12" r="10" />
-    <Path d="M12 6v6l4 2" />
+// --- Professional High-Fidelity Icons ---
+const RewardIcon = ({ type, color, size = 16 }: { type: 'cash' | 'coin' | 'pts' | 'empty'; color: string; size?: number }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {type === 'cash' && <Path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />}
+    {type === 'coin' && <Circle cx="12" cy="12" r="10" />}
+    {type === 'pts' && <Path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />}
+    {type === 'empty' && (
+      <>
+        <Rect x="2" y="5" width="20" height="14" rx="2" />
+        <Path d="M2 10h20" />
+      </>
+    )}
   </Svg>
 );
 
-const CoinIcon = () => (
-  <Svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFB800" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-    <Circle cx="12" cy="12" r="10" />
-    <Path d="M12 8v8M8 12h8" />
-  </Svg>
-);
+type CouponAssignmentItem = {
+  assignmentId: string;
+  status: 'ASSIGNED' | 'REDEEMED' | 'EXPIRED';
+  coupon: {
+    id: string;
+    title: string;
+    shortDescription: string | null;
+    imageUrl: string | null;
+    shopId: string;
+  } | null;
+};
 
-// --- Mock Data ---
-const REWARDS = [
-  { id: '1', name: 'Cookie Cottage', offer: 'TEST OFFER', date: '09-Jul-26', coins: 10, initial: 'C' },
-  { id: '2', name: 'Barista', offer: 'Exclusive Deal', date: '24-Jul-26', coins: 10, initial: 'B' },
-  { id: '3', name: 'New Offer', offer: 'Limited Drop', date: '21-Sep-26', coins: 15, initial: 'C' },
-  { id: '4', name: 'Zomato Pro', offer: 'Dinner Special', date: '05-Aug-26', coins: 20, initial: 'Z' },
-];
+type AvailableCoupon = {
+  id: string;
+  title: string;
+  shortDescription: string | null;
+  imageUrl: string | null;
+  cashiPointsCost: number;
+  shop: { id: string; name: string; imageUrl: string | null };
+};
+
+type RewardsData = {
+  cashiPoints: number;
+  myCoupons: CouponAssignmentItem[];
+  nearby: AvailableCoupon[];
+};
+
+function assetUrl(pathOrUrl: string | null) {
+  if (!pathOrUrl) return null;
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  if (!pathOrUrl.startsWith('/')) return pathOrUrl;
+  const origin = API_BASE_URL.replace(/\/+$/, '').replace(/\/api$/, '');
+  return `${origin}${pathOrUrl}`;
+}
 
 export function RewardsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState('NEW');
+  const token = useAppSelector((s) => s.auth.accessToken);
 
-  const renderRewardCard = ({ item }: { item: typeof REWARDS[0] }) => (
-    <View style={styles.rewardCard}>
-      {/* Brand Image Container */}
-      <View style={styles.imageBox}>
-        <View style={styles.brandCircle}>
-           <Text style={styles.brandInitial}>{item.initial}</Text>
-        </View>
-      </View>
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState<'Discover' | 'My Vouchers'>('Discover');
+  const [data, setData] = useState<RewardsData>({ cashiPoints: 0, myCoupons: [], nearby: [] });
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
-      <View style={styles.cardContent}>
-        <Text style={styles.rewardTitle} numberOfLines={1}>{item.name}</Text>
-        
-        <View style={styles.metaRow}>
-          <StopwatchIcon color={brand.helperColor} />
-          <Text style={styles.metaText}>{item.date}</Text>
+  const load = useCallback(async (mode: 'initial' | 'refresh') => {
+    if (!token) return;
+    if (mode === 'initial') setLoading(true);
+    else setRefreshing(true);
+
+    try {
+      const [dash, mine, avail] = await Promise.all([
+        apiRequest<any>('/users/me/dashboard', { method: 'GET', token }),
+        apiRequest<{ active: CouponAssignmentItem[] }>('/users/me/coupons', { method: 'GET', token }),
+        apiRequest<{ items: AvailableCoupon[] }>('/users/me/rewards/available-coupons?radiusKm=15', { method: 'GET', token }),
+      ]);
+
+      setData({
+        cashiPoints: Number(dash?.cashiPoints?.available ?? 0),
+        myCoupons: mine.active ?? [],
+        nearby: avail?.items ?? [],
+      });
+    } catch (e: any) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [token]);
+
+  useEffect(() => { load('initial'); }, [load]);
+
+  const claim = async (coupon: AvailableCoupon) => {
+    if (claimingId || data.cashiPoints < coupon.cashiPointsCost) return;
+    setClaimingId(coupon.id);
+    try {
+      const res = await apiRequest<any>('/users/me/rewards/claim-coupon', {
+        method: 'POST',
+        token,
+        body: { couponId: coupon.id },
+      });
+      setData(prev => ({
+        ...prev,
+        cashiPoints: Number(res.cashiPoints?.available ?? prev.cashiPoints),
+        nearby: prev.nearby.filter(c => c.id !== coupon.id),
+        myCoupons: [res.assignment, ...prev.myCoupons],
+      }));
+      navigation.navigate('CouponPass', { item: res.assignment });
+    } catch (e: any) {
+      Alert.alert('Claim Failed', e?.message ?? 'Please try again.');
+    } finally {
+      setClaimingId(null);
+    }
+  };
+
+  const listData = activeTab === 'Discover' ? data.nearby : data.myCoupons;
+
+  const renderItem = ({ item }: { item: any }) => {
+    const isDiscover = activeTab === 'Discover';
+    const title = isDiscover ? item.title : item.coupon?.title;
+    const img = assetUrl(isDiscover ? (item.imageUrl ?? item.shop?.imageUrl) : item.coupon?.imageUrl);
+    const shopName = isDiscover ? item.shop?.name : 'Claimed Reward';
+
+    return (
+      <TouchableOpacity
+        activeOpacity={0.7}
+        style={styles.txRow}
+        onPress={() => !isDiscover && navigation.navigate('CouponPass', { item })}
+      >
+        <View style={styles.storeCircle}>
+          {img ? (
+            <Image source={{ uri: img }} style={styles.storeImg} />
+          ) : (
+            <Text style={styles.storeInitial}>{title?.[0]?.toUpperCase() ?? 'R'}</Text>
+          )}
         </View>
 
-        <View style={styles.actionRow}>
-          <View style={styles.coinBadge}>
-            <CoinIcon />
-            <Text style={styles.coinVal}>{item.coins}</Text>
-          </View>
-          <TouchableOpacity style={styles.grabBtn} activeOpacity={0.8}>
-            <Text style={styles.grabText}>GRAB</Text>
-          </TouchableOpacity>
+        <View style={styles.mainInfo}>
+          <Text style={styles.txStoreName} numberOfLines={1}>{title}</Text>
+          <Text style={styles.dateText} numberOfLines={1}>{shopName}</Text>
         </View>
-      </View>
-    </View>
-  );
+
+        <View style={styles.amountCol}>
+          {isDiscover ? (
+            <TouchableOpacity 
+              activeOpacity={0.8}
+              style={[styles.grabBtn, data.cashiPoints < item.cashiPointsCost && styles.grabBtnDisabled]}
+              onPress={() => claim(item)}
+              disabled={claimingId === item.id || data.cashiPoints < item.cashiPointsCost}
+            >
+              {claimingId === item.id ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <Text style={styles.grabBtnText}>{item.cashiPointsCost} pts</Text>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.coinBadge}>
+              <View style={styles.coinDot} />
+              <Text style={styles.coinText}>ACTIVE</Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
-      {/* --- ELITE DARK HEADER --- */}
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+      {/* --- ELITE DARK HERO (Exact Pattern) --- */}
+      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <View style={styles.navRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backCircle}>
             <View style={styles.backArrow} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Rewards</Text>
-          <View style={styles.placeholder} />
+          <Text style={styles.headerTitle}>Rewards Center</Text>
+          <View style={{ width: 44 }} />
         </View>
 
-        {/* --- PREMIUM UNDERLINE TABS --- */}
-        <View style={styles.tabContainer}>
-          {['NEW', 'TRENDING', 'CRAFTED FOR YOU'].map((tab) => (
-            <TouchableOpacity 
-              key={tab} 
-              onPress={() => setActiveTab(tab)}
-              style={[styles.tab, activeTab === tab && styles.activeTab]}
-            >
-              <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
-                {tab}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        <View style={styles.heroContent}>
+            <Text style={styles.heroGreeting}>Rewards Center</Text>
+            <Text style={styles.heroSub}>
+              Redeem Cashi Points for exclusive vouchers and track your claimed rewards.
+            </Text>
+
+            <View style={styles.balanceWidget}>
+              <View style={styles.balanceItem}>
+                <View style={styles.balIconRow}>
+                  <RewardIcon type="pts" color={brand.blue} size={14} />
+                  <Text style={[styles.balLabel, { color: brand.blue }]}>CASHI POINTS</Text>
+                </View>
+                <Text style={[styles.balVal, { color: brand.blue }]}>{data.cashiPoints}</Text>
+              </View>
+
+              <View style={styles.balDivider} />
+              
+              <View style={styles.balanceItem}>
+                <View style={styles.balIconRow}>
+                  <RewardIcon type="cash" color={brand.heroBody} size={14} />
+                  <Text style={styles.balLabel}>MY VOUCHERS</Text>
+                </View>
+                <Text style={styles.balVal}>{data.myCoupons.length}</Text>
+              </View>
+
+              <View style={styles.balDivider} />
+              
+              <View style={styles.balanceItem}>
+                <View style={styles.balIconRow}>
+                  <RewardIcon type="coin" color={brand.heroBody} size={14} />
+                  <Text style={styles.balLabel}>NEARBY</Text>
+                </View>
+                <Text style={styles.balVal}>{data.nearby.length}</Text>
+              </View>
+            </View>
         </View>
       </View>
 
       {/* --- CONTENT SHEET --- */}
       <View style={styles.sheet}>
         <View style={styles.sheetHandle} />
-        
+
         <FlatList
-          data={REWARDS}
-          renderItem={renderRewardCard}
-          keyExtractor={(item) => item.id}
-          numColumns={2}
-          columnWrapperStyle={styles.gridRow}
+          data={listData}
+          renderItem={renderItem}
+          keyExtractor={(it, idx) => (it.assignmentId || it.id || idx.toString())}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 10, paddingBottom: 120 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor={brand.blue} />}
           ListHeaderComponent={() => (
-            <View style={styles.listHeader}>
-               <Text style={styles.listTitle}>Available for you</Text>
-               <Text style={styles.listSub}>Use your Cashi Coins to unlock these perks</Text>
+            <View style={styles.listHeaderContainer}>
+              <View style={styles.segmentContainer}>
+                {(['Discover', 'My Vouchers'] as const).map((tab) => {
+                  const isActive = activeTab === tab;
+                  return (
+                    <TouchableOpacity
+                      key={tab}
+                      activeOpacity={0.8}
+                      onPress={() => setActiveTab(tab)}
+                      style={[styles.segmentTab, isActive && styles.activeSegment]}>
+                      <Text style={[styles.segmentLabel, isActive && styles.activeSegmentLabel]}>{tab}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={styles.sectionTitleRow}>
+                <Text style={styles.sectionTitle}>
+                  {activeTab === 'Discover' ? 'Recommended for You' : 'Recent Claims'}
+                </Text>
+                {loading && <ActivityIndicator size="small" color={brand.blue} />}
+              </View>
             </View>
           )}
+          ListEmptyComponent={() => {
+            if (loading) return null;
+            return (
+              <View style={styles.emptyState}>
+                <RewardIcon type="empty" color={brand.helperColor} size={32} />
+                <Text style={styles.emptyTitle}>No rewards found</Text>
+                <Text style={styles.emptySub}>
+                  {activeTab === 'Discover' 
+                    ? "Check back later for new nearby offers." 
+                    : "You haven't claimed any vouchers yet."}
+                </Text>
+              </View>
+            );
+          }}
         />
       </View>
     </View>
@@ -129,78 +292,77 @@ export function RewardsScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: brand.dark },
   
-  // Header & Tabs
-  header: { paddingBottom: 10 },
-  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, marginBottom: 25 },
-  backCircle: { width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
+  // Header (Exact MyLoyalty Pattern)
+  header: { paddingBottom: 50 },
+  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 24 },
+  backCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
   backArrow: { width: 10, height: 10, borderLeftWidth: 2, borderTopWidth: 2, borderColor: brand.surface, transform: [{ rotate: '-45deg' }], marginLeft: 4 },
-  headerTitle: { color: brand.surface, fontSize: 18, fontWeight: '800' },
-  placeholder: { width: 40 },
-
-  tabContainer: { flexDirection: 'row', paddingHorizontal: 24, gap: 24 },
-  tab: { paddingBottom: 12, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  activeTab: { borderBottomColor: brand.blue },
-  tabText: { color: brand.heroBody, fontSize: 11, fontWeight: '800', letterSpacing: 0.6 },
-  activeTabText: { color: brand.blue },
-
-  // Sheet
-  sheet: { flex: 1, backgroundColor: brand.background, borderTopLeftRadius: 36, borderTopRightRadius: 36, marginTop: 10 },
-  sheetHandle: { width: 36, height: 4, backgroundColor: '#E0E2EE', borderRadius: 2, alignSelf: 'center', marginVertical: 15 },
+  headerTitle: { color: brand.surface, fontSize: 16, fontWeight: '800', letterSpacing: 0.3 },
+  arrow: { width: 10, height: 10, borderLeftWidth: 2, borderTopWidth: 2, borderColor: brand.surface, transform: [{ rotate: '-45deg' }], marginLeft: 4 },
   
-  listHeader: { marginBottom: 20 },
-  listTitle: { fontSize: 18, fontWeight: '800', color: brand.cardHeading },
-  listSub: { fontSize: 13, color: brand.cardBody, marginTop: 4, fontWeight: '500' },
-
-  // Reward Card Grid
-  gridRow: { justifyContent: 'space-between' },
-  rewardCard: { 
-    width: COLUMN_WIDTH, 
-    backgroundColor: brand.surface, 
+  heroContent: { paddingHorizontal: 24 },
+  heroGreeting: { color: brand.surface, fontSize: 32, fontWeight: '900', letterSpacing: -0.8, marginBottom: 6 },
+  heroSub: { color: brand.heroBody, fontSize: 14, fontWeight: '500', lineHeight: 22, opacity: 0.8 },
+  
+  balanceWidget: { 
+    flexDirection: 'row', 
+    backgroundColor: 'rgba(255,255,255,0.04)', 
     borderRadius: 24, 
-    marginBottom: 16, 
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#F0F1F7',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.02,
-    shadowRadius: 6,
-    elevation: 1,
+    paddingVertical: 20, 
+    paddingHorizontal: 12, 
+    borderWidth: 1, 
+    borderColor: 'rgba(255,255,255,0.08)', 
+    marginTop: 24,
   },
-  imageBox: { 
-    height: 140, 
-    backgroundColor: brand.inputBg, 
-    alignItems: 'center', 
-    justifyContent: 'center',
-    padding: 20
-  },
-  brandCircle: { 
-    width: 80, 
-    height: 80, 
-    borderRadius: 40, 
-    backgroundColor: '#FFF', 
-    alignItems: 'center', 
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: brand.inputBorder,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.02,
-    shadowRadius: 5,
-    elevation: 1,
-  },
-  brandInitial: { fontSize: 28, fontWeight: '900', color: brand.dark },
+  balanceItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  balIconRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 6 },
+  balLabel: { color: brand.heroBody, fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
+  balVal: { color: brand.surface, fontSize: 20, fontWeight: '900', letterSpacing: -0.5 },
+  balDivider: { width: 1, height: '80%', backgroundColor: 'rgba(255,255,255,0.1)', alignSelf: 'center' },
 
-  cardContent: { padding: 14 },
-  rewardTitle: { fontSize: 14, fontWeight: '800', color: brand.blue, marginBottom: 8 },
+  // Sheet Area (Exact MyLoyalty Pattern)
+  sheet: { flex: 1, backgroundColor: '#F8F9FB', borderTopLeftRadius: 32, borderTopRightRadius: 32, marginTop: -24 },
+  sheetHandle: { width: 40, height: 5, backgroundColor: '#E2E5F1', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 20 },
   
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16 },
-  metaText: { fontSize: 11, color: brand.helperColor, fontWeight: '700' },
+  listHeaderContainer: { paddingHorizontal: 24 },
+  segmentContainer: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 14, padding: 4, marginBottom: 24 },
+  segmentTab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
+  activeSegment: { backgroundColor: brand.surface, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2 },
+  segmentLabel: { fontSize: 13, fontWeight: '700', color: brand.helperColor },
+  activeSegmentLabel: { color: brand.dark, fontWeight: '800' },
 
-  actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  coinBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  coinVal: { fontSize: 14, fontWeight: '900', color: '#FFB800' },
+  sectionTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sectionTitle: { fontSize: 18, fontWeight: '900', color: brand.cardHeading },
   
-  grabBtn: { backgroundColor: brand.blue, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
-  grabText: { color: brand.surface, fontSize: 11, fontWeight: '900' },
+  // Rows
+  txRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    marginHorizontal: 20,
+    marginBottom: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#ECEEF4',
+  },
+  storeCircle: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#F8F9FB', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#ECEEF4', overflow: 'hidden' },
+  storeImg: { width: '100%', height: '100%' },
+  storeInitial: { fontSize: 18, fontWeight: '800', color: brand.cardHeading },
+  mainInfo: { flex: 1, marginLeft: 14 },
+  txStoreName: { fontSize: 15, fontWeight: '800', color: brand.cardHeading, marginBottom: 4 },
+  dateText: { fontSize: 11, color: brand.helperColor, fontWeight: '600' },
+  
+  amountCol: { alignItems: 'flex-end' },
+  grabBtn: { backgroundColor: brand.dark, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  grabBtnDisabled: { backgroundColor: '#C9CEDA' },
+  grabBtnText: { color: '#FFF', fontSize: 11, fontWeight: '900' },
+  
+  coinBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: brand.blueLight, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  coinDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: brand.blue, marginRight: 5 },
+  coinText: { color: brand.blue, fontSize: 10, fontWeight: '900' },
+
+  emptyState: { alignItems: 'center', paddingVertical: 60, paddingHorizontal: 30 },
+  emptyTitle: { fontSize: 16, fontWeight: '800', color: brand.cardHeading, marginTop: 16, marginBottom: 8 },
+  emptySub: { fontSize: 13, fontWeight: '500', color: brand.helperColor, textAlign: 'center', lineHeight: 20 },
 });

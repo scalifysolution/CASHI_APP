@@ -1,6 +1,6 @@
 import { CommonActions, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +17,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../navigation/types';
 import { apiRequest } from '../api/client';
+import { ApiException } from '../api/http';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { fetchMe } from '../store/authSlice';
 import { setUser } from '../store/userSlice';
 import { saveUserProfile } from '../store/userStorage';
 import { brand } from '../theme';
@@ -32,8 +34,17 @@ export function OnboardingScreen() {
 
   const [fullName, setFullName] = useState(existing.displayName ?? '');
   const [email, setEmail] = useState(existing.email ?? '');
-  const [refCode, setRefCode] = useState(existing.referenceCode ?? '');
+  /** Someone else's code — only used as `referrerCode` for the API (not your share code). */
+  const [friendReferralCode, setFriendReferralCode] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const myReferralCode = useAppSelector((s) => s.user.referenceCode);
+
+  useEffect(() => {
+    if (accessToken) {
+      void dispatch(fetchMe(accessToken));
+    }
+  }, [accessToken, dispatch]);
 
   // Validation: Only Full Name is mandatory
   const isValid = fullName.trim().length >= 2;
@@ -47,33 +58,50 @@ export function OnboardingScreen() {
     const payload = {
       displayName: fullName.trim(),
       email: email.trim(),
-      referenceCode: refCode.trim(),
       profileComplete: true,
       phone: existing.phone,
       id: existing.id,
     };
+    const normalizedFriend = friendReferralCode.trim().toUpperCase().replace(/\s+/g, '');
+    const body: { name: string; email?: string; referrerCode?: string } = {
+      name: payload.displayName,
+      ...(payload.email ? { email: payload.email } : {}),
+      ...(normalizedFriend.length > 0 ? { referrerCode: normalizedFriend } : {}),
+    };
     setSaving(true);
+    let serverReferralCode = myReferralCode;
     try {
-      await apiRequest<{ id: string }>('/auth/customer/profile', {
+      const res = await apiRequest<{
+        id: string;
+        referralCode?: string;
+      }>('/auth/customer/profile', {
         method: 'POST',
         token: accessToken,
-        body: {
-          name: payload.displayName,
-          ...(payload.email ? { email: payload.email } : {}),
-        },
+        body,
       });
+      if (res.referralCode) serverReferralCode = res.referralCode;
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Could not save profile';
+      const msg =
+        e instanceof ApiException
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : 'Could not save profile';
       Alert.alert('Save failed', msg);
       setSaving(false);
       return;
     }
-    dispatch(setUser(payload));
+    dispatch(
+      setUser({
+        ...payload,
+        referenceCode: serverReferralCode,
+      }),
+    );
     await saveUserProfile({
       displayName: payload.displayName,
       email: payload.email,
       phone: existing.phone,
-      referenceCode: payload.referenceCode,
+      referenceCode: serverReferralCode,
       profileComplete: true,
     });
     setSaving(false);
@@ -109,6 +137,19 @@ export function OnboardingScreen() {
             <Text style={styles.cardSub}>
               Tell us a bit about yourself to get the best out of your local rewards.
             </Text>
+
+            <View style={styles.myCodeSection}>
+              <Text style={styles.myCodeLabel}>Your referral code</Text>
+              <View style={styles.myCodeBox}>
+                <Text style={styles.myCodeValue} selectable>
+                  {myReferralCode || '…'}
+                </Text>
+              </View>
+              <Text style={styles.myCodeHint}>
+                Share this code with friends. Their welcome reward (100 wallet points for shopping) is
+                not active yet; we will turn it on soon.
+              </Text>
+            </View>
 
             {/* Form Fields */}
             <View style={styles.formContainer}>
@@ -159,18 +200,18 @@ export function OnboardingScreen() {
                 </View>
               </View>
 
-              {/* Reference Code (Optional) */}
+              {/* Friend's referral code (Optional) */}
               <View style={styles.inputGroup}>
                 <Text style={styles.fieldLabel}>
-                  Reference Code <Text style={styles.optionalText}>(Optional)</Text>
+                  Friend&apos;s referral code <Text style={styles.optionalText}>(Optional)</Text>
                 </Text>
                 <View style={styles.inputWrapper} collapsable={false}>
                   <TextInput
                     style={styles.input}
-                    placeholder="Enter code"
+                    placeholder="e.g. CASHI-XXXXXX"
                     placeholderTextColor={brand.placeholder}
-                    value={refCode}
-                    onChangeText={setRefCode}
+                    value={friendReferralCode}
+                    onChangeText={setFriendReferralCode}
                     autoCapitalize="characters"
                     autoCorrect={false}
                     returnKeyType="done"
@@ -181,6 +222,10 @@ export function OnboardingScreen() {
                     selectionColor={brand.blueLight}
                   />
                 </View>
+                <Text style={styles.fieldFootnote}>
+                  If you join with a friend&apos;s code, you&apos;ll be eligible for 100 wallet points
+                  toward future shopping. Point credit is not live yet.
+                </Text>
               </View>
 
             </View>
@@ -264,9 +309,39 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: brand.cardBody,
     lineHeight: 22,
-    marginBottom: 32,
+    marginBottom: 20,
   },
-  
+  myCodeSection: {
+    marginBottom: 24,
+  },
+  myCodeLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: brand.fieldLabelColor,
+    marginBottom: 8,
+  },
+  myCodeBox: {
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: brand.inputBorder,
+    backgroundColor: brand.inputBg,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  myCodeValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: brand.cardHeading,
+    letterSpacing: 1.5,
+  },
+  myCodeHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: brand.helperColor,
+    lineHeight: 17,
+    fontWeight: '500',
+  },
   formContainer: {
     gap: 20, // Spaces out the input groups nicely
   },
@@ -284,6 +359,13 @@ const styles = StyleSheet.create({
     color: brand.helperColor,
     fontWeight: '400',
     fontSize: 12,
+  },
+  fieldFootnote: {
+    marginTop: 8,
+    fontSize: 12,
+    color: brand.helperColor,
+    lineHeight: 17,
+    fontWeight: '500',
   },
   inputWrapper: {
     height: 56,

@@ -1,6 +1,6 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
@@ -9,6 +9,7 @@ import { CouponsScreen } from '../screens/CouponsScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { MyLoyaltyScreen } from '../screens/MyLoyaltyScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { ScannerScreen } from '../screens/ScannerScreen';
 import { brand } from '../theme';
 import { HomeMenuProvider, useHomeMenu } from './HomeMenuContext';
 import type { MainTabParamList } from './types';
@@ -42,6 +43,35 @@ const CouponsIcon = ({ color }: { color: string }) => (
     <Path d="M7 7h.01" />
   </Svg>
 );
+
+const ScannerIcon = ({ color }: { color: string }) => (
+  <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M4 7V5a1 1 0 011-1h2M20 7V5a1 1 0 00-1-1h-2" />
+    <Path d="M4 17v2a1 1 0 001 1h2M20 17v2a1 1 0 01-1 1h-2" />
+    <Path d="M9 12h6" />
+  </Svg>
+);
+
+function ScannerTabButton(props: any) {
+  const focused = !!props?.accessibilityState?.selected;
+  return (
+    <View style={styles.scannerBtnWrap} pointerEvents="box-none">
+      <View style={[styles.scannerHalo, focused && styles.scannerHaloActive]} />
+      <TouchableOpacity
+        {...props}
+        onPress={props?.onPress}
+        activeOpacity={0.9}
+        style={[styles.scannerBtn, focused && styles.scannerBtnActive]}>
+        <Image
+          source={require('../assets/cashi-logo.png')}
+          style={styles.scannerLogoBg}
+          resizeMode="contain"
+        />
+        <ScannerIcon color={brand.surface} />
+      </TouchableOpacity>
+    </View>
+  );
+}
 
 /** Star/loyalty */
 const LoyaltyIcon = ({ color }: { color: string }) => (
@@ -117,6 +147,15 @@ export function MainTabNavigator() {
             }}
           />
           <Tab.Screen
+            name="Scanner"
+            component={ScannerScreen}
+            options={{
+              tabBarLabel: () => null,
+              tabBarIcon: () => null,
+              tabBarButton: (props) => <ScannerTabButton {...props} />,
+            }}
+          />
+          <Tab.Screen
             name="MyLoyalty"
             component={MyLoyaltyScreen}
             options={{
@@ -155,6 +194,7 @@ const styles = StyleSheet.create({
     backgroundColor: brand.surface,
     borderTopWidth: 0,
     paddingTop: 10,
+    overflow: 'visible',
 
     // Premium Soft Shadow
     shadowColor: '#000',
@@ -178,5 +218,48 @@ const styles = StyleSheet.create({
   },
   iconBoxActive: {
     backgroundColor: brand.blueLight, // Subtle highlight when active
+  },
+
+  // Center Scanner (raised) button
+  scannerBtnWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    top: -18,
+    width: 68,
+  },
+  scannerHalo: {
+    position: 'absolute',
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    backgroundColor: 'rgba(59, 158, 232, 0.14)',
+  },
+  scannerHaloActive: {
+    backgroundColor: 'rgba(59, 158, 232, 0.22)',
+  },
+  scannerBtn: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: brand.blue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 4,
+    borderColor: brand.surface,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 16,
+    overflow: 'hidden',
+  },
+  scannerBtnActive: {
+    backgroundColor: brand.blue,
+  },
+  scannerLogoBg: {
+    position: 'absolute',
+    width: 62,
+    height: 62,
+    opacity: 0.16,
   },
 });

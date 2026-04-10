@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ActivityIndicator, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -6,6 +6,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MERCHANT_PORTAL_URL } from '../config/env';
 import type { RootStackParamList } from '../navigation/types';
 import { brand } from '../theme';
+import { useAppSelector } from '../store/hooks';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'MerchantPortal'>;
@@ -13,7 +14,38 @@ type Props = {
 
 export function MerchantPortalScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const url = (MERCHANT_PORTAL_URL || '').trim();
+  const baseUrl = (MERCHANT_PORTAL_URL || '').trim().replace(/\/+$/, '');
+  const token = useAppSelector((s) => s.auth.accessToken);
+  const user = useAppSelector((s) => s.user);
+
+  const url = useMemo(() => {
+    if (!baseUrl) return '';
+    return `${baseUrl}/login?fromApp=1`;
+  }, [baseUrl]);
+
+  const injected = useMemo(() => {
+    const safeToken = token ? JSON.stringify(token) : '""';
+    const profile = {
+      id: user?.id ?? null,
+      email: user?.email ?? '',
+      phone: user?.phone ?? '',
+      name: user?.displayName ?? '',
+      role: user?.role ?? '',
+    };
+    const safeProfile = JSON.stringify(profile);
+
+    return `
+      (function () {
+        try {
+          if (${safeToken} && ${safeToken}.length > 0) {
+            localStorage.setItem('cashi_access_token', ${safeToken});
+          }
+          localStorage.setItem('cashi_app_profile', ${JSON.stringify(safeProfile)});
+        } catch (e) {}
+      })();
+      true;
+    `;
+  }, [token, user?.id, user?.email, user?.phone, user?.displayName, user?.role]);
 
   return (
     <View style={styles.container}>
@@ -40,6 +72,9 @@ export function MerchantPortalScreen({ navigation }: Props) {
         <WebView
           source={{ uri: url }}
           style={styles.webview}
+          javaScriptEnabled
+          domStorageEnabled
+          injectedJavaScriptBeforeContentLoaded={injected}
           startInLoadingState
           renderLoading={() => (
             <View style={styles.loading}>

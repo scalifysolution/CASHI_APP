@@ -110,9 +110,9 @@ export function EarningsScreen({ navigation }: any) {
     return items.filter((i) => (i.pointsEarned ?? 0) > 0);
   }, [activeTab, items]);
 
-  const pointsAvailable = String(dash?.points?.available ?? 0);
-  const coinsAvailable = String(dash?.points?.earned ?? 0);
-  const cashback = `₹${dash?.points?.available ?? 0}`;
+  const pointsAvailable = '0';
+  const coinsAvailable = String(dash?.points?.available ?? 0);
+  const cashback = `₹${dash?.cashback?.savedAmount ?? 0}`;
 
   const renderTransaction = ({ item }: { item: EarningItem }) => {
     const store = item.shop?.name ?? 'Store';
@@ -181,7 +181,7 @@ export function EarningsScreen({ navigation }: any) {
         {/* --- PREMIUM BALANCE WIDGET --- */}
         <View style={styles.balanceWidget}>
           <View style={styles.balanceItem}>
-            <Text style={styles.balLabel}>POINTS</Text>
+            <Text style={styles.balLabel}>CASHI POINTS</Text>
             <Text style={styles.balVal}>{pointsAvailable}</Text>
           </View>
           <View style={styles.balDivider} />

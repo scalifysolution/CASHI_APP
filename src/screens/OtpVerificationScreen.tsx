@@ -189,6 +189,7 @@ export function OtpVerificationScreen({
                   maxLength={OTP_LENGTH}
                   keyboardType="number-pad"
                   textContentType="oneTimeCode"
+                  autoComplete={Platform.OS === 'android' ? 'sms-otp' : 'one-time-code'}
                   autoFocus
                   caretHidden
                   {...(Platform.OS === 'android'

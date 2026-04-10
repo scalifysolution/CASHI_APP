@@ -23,6 +23,13 @@ const Icon = ({ name, color = brand.surface, size = 20 }: { name: string; color?
     {name === 'store' && <><Path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><Path d="M9 22V12h6v10" /></>}
     {name === 'sale' && <><Path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><Path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" /></>}
     {name === 'coupon' && <Path d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 001 1.73 2 2 0 00-1 1.73V17a2 2 0 002 2h14a2 2 0 002-2v-3.27a2 2 0 00-1-1.73 2 2 0 001-1.73V7a2 2 0 00-2-2H5z" />}
+    {name === 'scan' && (
+      <>
+        <Path d="M4 7V5a1 1 0 011-1h2M20 7V5a1 1 0 00-1-1h-2" />
+        <Path d="M4 17v2a1 1 0 001 1h2M20 17v2a1 1 0 01-1 1h-2" />
+        <Path d="M9 12h6" />
+      </>
+    )}
     {name === 'loyalty' && <Path d="M20.42 4.58a5 5 0 00-7.07 0l-1.35 1.35-1.35-1.35a5 5 0 00-7.07 7.07l1.35 1.35L12 20l7.07-7.07 1.35-1.35a5 5 0 000-7.07z" />}
     {name === 'earnings' && <><Path d="M18 20V10" /><Path d="M12 20V4" /><Path d="M6 20v-4" /></>}
     {name === 'rewards' && <Path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />}
@@ -88,6 +95,7 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
 
   const MENU_ITEMS = useMemo(() => [
     { label: 'My Coupons', icon: 'coupon', screen: 'CouponsFromMenu' },
+    { label: 'Scanner', icon: 'scan', screen: 'Scanner' },
     { label: 'My Loyalty', icon: 'loyalty', screen: 'MyLoyalty' },
     { label: 'Rewards Marketplace', icon: 'rewards', screen: 'Rewards' },
     { label: 'Help & Support', icon: 'support', screen: null },
@@ -132,7 +140,6 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
               </TouchableOpacity>
             </View>
             <Text style={styles.userName}>{displayName || 'Mohan Singh'}</Text>
-            <Text style={styles.userTier}>Platinum Member</Text>
           </View>
 
           <View style={styles.divider} />
@@ -145,16 +152,13 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
               onPress={() => {
                 closeDrawer();
                 const base = (MERCHANT_PORTAL_URL || '').replace(/\/+$/, '');
-                const isUser = String(role || '').toUpperCase() === 'USER' || !role;
-                const rawUrl = isUser ? `${base}/register` : `${base}`;
-                const url = withQueryParams(rawUrl, {
-                  token,
-                  action: isUser ? 'REGISTER_ON_CASHI' : 'REGISTER_SALE',
-                });
-                navigation?.navigate?.('WebPage', {
-                  title: isUser ? 'Start Cashi' : 'Register Sale',
-                  url,
-                });
+                if (!String(base || '').trim()) {
+                  // MerchantPortalScreen will also show an error, but alerting is clearer here.
+                  // eslint-disable-next-line no-alert
+                  return;
+                }
+                // Always open the dedicated MerchantPortal WebView so we can inject the app token.
+                navigation?.navigate?.('MerchantPortal');
               }}
             >
               <View style={styles.merchantIconBox}>
@@ -182,6 +186,13 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
                     dispatch(logout());
                     return;
                   }
+                  if (item.label === 'Help & Support') {
+                    navigation?.navigate?.('WebPage', {
+                      title: 'Help & FAQ',
+                      url: 'https://cashi.in/#faq',
+                    });
+                    return;
+                  }
                   if (item.screen) navigation?.navigate?.(item.screen);
                 }}
               >
@@ -197,7 +208,18 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
 
           {/* Footer Section */}
           <View style={styles.footer}>
-            <TouchableOpacity><Text style={styles.footerLink}>Privacy Policy</Text></TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => {
+                onClose?.();
+                navigation?.navigate?.('WebPage', {
+                  title: 'Privacy Policy',
+                  url: 'https://cashi.in/privacy.html',
+                });
+              }}
+            >
+              <Text style={styles.footerLink}>Privacy Policy</Text>
+            </TouchableOpacity>
             <Text style={styles.version}>CASHI v1.1.6 BETA</Text>
           </View>
 
