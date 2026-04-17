@@ -1,13 +1,12 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useMemo, useState } from 'react';
-import { 
-  Image, 
-  ScrollView, 
-  StatusBar, 
-  StyleSheet, 
-  Text, 
-  TouchableOpacity, 
-  View, 
+import {
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
   LayoutAnimation,
   Platform,
   UIManager
@@ -18,6 +17,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
 import { API_BASE_URL } from '../config/env';
+import { RemoteAssetImage } from '../components/RemoteAssetImage';
 import { buildMemberQrPayload } from '../utils/memberQr';
 import { memberIdMasked } from '../utils/memberId';
 
@@ -43,7 +43,6 @@ export function CouponPassScreen({ navigation, route }: Props) {
   const [isQrRevealed, setIsQrRevealed] = useState(false);
 
   const item = (route.params as any)?.item as any;
-  const assignmentId = String(item?.assignmentId ?? '').trim();
   const c = item?.coupon ?? null;
 
   const title = String(c?.title ?? 'Special Offer').trim();
@@ -109,7 +108,7 @@ export function CouponPassScreen({ navigation, route }: Props) {
             {/* FULL WIDTH HERO IMAGE */}
             <View style={styles.heroContainer}>
               {img ? (
-                <Image source={{ uri: img }} style={styles.heroImg} resizeMode="cover" />
+                <RemoteAssetImage uri={img} style={styles.heroImg} resizeMode="cover" />
               ) : (
                 <View style={styles.heroFallback}>
                   <Text style={styles.fallbackText}>{title?.[0]?.toUpperCase() ?? 'O'}</Text>
@@ -263,9 +262,9 @@ const styles = StyleSheet.create({
     bottom: 16,
     right: 16,
     backgroundColor: brand.blue,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 7,
     shadowColor: '#000',
     shadowOpacity: 0.2,
     shadowRadius: 4,
@@ -274,9 +273,9 @@ const styles = StyleSheet.create({
   },
   floatingBadgeText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '900',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
 
   // Card Body Content

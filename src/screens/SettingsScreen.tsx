@@ -29,7 +29,6 @@ const SettingIcon = ({ type, color = brand.cardHeading }: { type: string; color?
 export function SettingsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const dispatch = useAppDispatch();
-  const cashiBusiness = useAppSelector((s) => s.user.cashiBusiness);
   const role = useAppSelector((s) => s.user.role);
   const displayName = useAppSelector((s) => s.user.displayName) || '—';
   const email = useAppSelector((s) => s.user.email) || '—';
@@ -57,7 +56,8 @@ export function SettingsScreen({ navigation }: any) {
       return;
     }
     // Always open the dedicated MerchantPortal WebView so we can inject the app token.
-    navigation.navigate('MerchantPortal');
+    const rootNav = navigation?.getParent?.() ?? navigation;
+    rootNav.navigate('MerchantPortal');
   };
 
   // Delete account is handled under Personal Information (not shown here).
@@ -108,25 +108,27 @@ export function SettingsScreen({ navigation }: any) {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={styles.sheetHandle} />
 
-          <TouchableOpacity style={styles.storeCtaCard} onPress={goRegisterSale} activeOpacity={0.92}>
-            <View style={styles.storeCtaIconWrap}>
-              <Svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={brand.surface} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <Path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                <Rect x="9" y="22" width="6" height="10" />
-              </Svg>
-            </View>
-            <View style={styles.storeCtaTextBlock}>
-              <Text style={styles.storeCtaTitle}>
-                {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Start Cashi on your Store' : 'Register sale'}
-              </Text>
-              <Text style={styles.storeCtaSub}>
-                {(String(role || '').toUpperCase() === 'USER' || !role)
-                  ? 'Opens registration inside the app'
-                  : 'Open the merchant portal to record a sale'}
-              </Text>
-            </View>
-            <View style={styles.storeCtaChevron} />
-          </TouchableOpacity>
+          {String(role || '').toUpperCase() === 'SUPERADMIN' ? null : (
+            <TouchableOpacity style={styles.storeCtaCard} onPress={goRegisterSale} activeOpacity={0.92}>
+              <View style={styles.storeCtaIconWrap}>
+                <Svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={brand.surface} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <Path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <Rect x="9" y="22" width="6" height="10" />
+                </Svg>
+              </View>
+              <View style={styles.storeCtaTextBlock}>
+                <Text style={styles.storeCtaTitle}>
+                  {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Start Cashi on your Store' : 'Register sale'}
+                </Text>
+                <Text style={styles.storeCtaSub}>
+                  {(String(role || '').toUpperCase() === 'USER' || !role)
+                    ? 'Opens registration inside the app'
+                    : 'Open the merchant portal to record a sale'}
+                </Text>
+              </View>
+              <View style={styles.storeCtaChevron} />
+            </TouchableOpacity>
+          )}
 
           {/* Section: Personal */}
           <Text style={styles.sectionLabel}>PERSONAL</Text>

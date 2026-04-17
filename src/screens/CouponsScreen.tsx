@@ -1,9 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
   FlatList,
   Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   RefreshControl,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -16,6 +19,8 @@ import { brand } from '../theme';
 import { useAppSelector } from '../store/hooks';
 import { apiRequest } from '../api/client';
 import { API_BASE_URL } from '../config/env';
+import { RemoteAssetImage } from '../components/RemoteAssetImage';
+import { SegmentedTabs } from '../components/SegmentedTabs';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HORIZONTAL_PADDING = 20;
@@ -68,8 +73,13 @@ export function CouponsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const showBack = route.name === 'CouponsFromMenu' || navigation.canGoBack();
-  const [activeTab, setActiveTab] = useState('Active');
+  const tabs = ['Active', 'Used', 'Expired'] as const;
+  type Tab = (typeof tabs)[number];
+  const [activeTab, setActiveTab] = useState<Tab>('Active');
   const token = useAppSelector((s) => s.auth.accessToken);
+
+  const pagerRef = useRef<ScrollView | null>(null);
+  const [pageWidth, setPageWidth] = useState(SCREEN_WIDTH);
   
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -104,13 +114,17 @@ export function CouponsScreen({ navigation }: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const list = useMemo(() => {
-    if (activeTab === 'Used') return data.used;
-    if (activeTab === 'Expired') return data.expired;
-    return data.active;
-  }, [activeTab, data.active, data.expired, data.used]);
+  const listForTab = useMemo(() => {
+    return {
+      Active: data.active,
+      Used: data.used,
+      Expired: data.expired,
+    } as const;
+  }, [data.active, data.expired, data.used]);
 
-  const renderCoupon = ({ item }: { item: CouponItem }) => {
+  const renderCouponForTab =
+    (tab: Tab) =>
+    ({ item }: { item: CouponItem }) => {
     const c = item.coupon;
     const title = c?.title ?? 'Partner Store';
     const img = assetUrl(c?.imageUrl ?? null);
@@ -128,10 +142,10 @@ export function CouponsScreen({ navigation }: any) {
     let statusText = '';
     let statusColor = '#111827'; // Dark gray by default
     
-    if (activeTab === 'Used') {
+    if (tab === 'Used') {
       statusText = 'Redeemed';
       statusColor = '#10B981'; // Green
-    } else if (activeTab === 'Expired') {
+    } else if (tab === 'Expired') {
       statusText = 'Expired';
       statusColor = '#9CA3AF'; // Light Gray
     } else {
@@ -153,14 +167,14 @@ export function CouponsScreen({ navigation }: any) {
 
     const initial = title.trim()?.[0]?.toUpperCase() ?? 'S';
     const rootNav = navigation?.getParent?.() ?? navigation;
-    const isInactive = activeTab !== 'Active';
+    const isInactive = tab !== 'Active';
 
     return (
       <TouchableOpacity
         activeOpacity={0.9}
         style={[styles.gridCard, isInactive && styles.gridCardInactive]}
         onPress={() => {
-          if (activeTab === 'Active') {
+          if (tab === 'Active') {
             rootNav?.navigate?.('CouponPass', { item });
           }
         }}
@@ -168,11 +182,7 @@ export function CouponsScreen({ navigation }: any) {
         {/* TOP: PERFECT IMAGE AREA */}
         <View style={styles.imageWrap}>
           {img ? (
-            <Image
-              source={{ uri: img }}
-              style={styles.cardImage}
-              resizeMode="cover"
-            />
+            <RemoteAssetImage uri={img} style={styles.cardImage} resizeMode="cover" />
           ) : (
             <Text style={styles.imageFallback}>{initial}</Text>
           )}
@@ -208,6 +218,25 @@ export function CouponsScreen({ navigation }: any) {
     );
   };
 
+  const goToTab = (tab: Tab) => {
+    setActiveTab(tab);
+    const idx = tabs.indexOf(tab);
+    if (idx >= 0) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: true });
+  };
+
+  useEffect(() => {
+    const idx = tabs.indexOf(activeTab);
+    if (idx >= 0) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageWidth]);
+
+  const onPagerMomentumEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const idx = pageWidth ? Math.round(x / pageWidth) : 0;
+    const next = tabs[Math.max(0, Math.min(tabs.length - 1, idx))];
+    if (next && next !== activeTab) setActiveTab(next);
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={brand.dark} />
@@ -227,90 +256,95 @@ export function CouponsScreen({ navigation }: any) {
         </View>
 
         {/* SEGMENTED TABS */}
-        <View style={styles.tabContainer}>
-          {['Active', 'Used', 'Expired'].map((tab) => {
-            const isActive = activeTab === tab;
-            return (
-              <TouchableOpacity 
-                key={tab} 
-                onPress={() => setActiveTab(tab)}
-                activeOpacity={0.8}
-                style={[styles.tab, isActive && styles.activeTab]}
-              >
-                <Text style={[styles.tabText, isActive && styles.activeTabText]}>
-                  {tab}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        <SegmentedTabs
+          options={tabs}
+          value={activeTab}
+          onChange={goToTab}
+          containerStyle={styles.tabContainer}
+          tabStyle={styles.tab}
+          indicatorStyle={styles.activeTab}
+          textStyle={styles.tabText}
+          activeTextStyle={styles.activeTabText}
+          inset={3}
+        />
       </View>
 
       {/* 2-COLUMN GRID LIST */}
       <View style={styles.sheetContainer}>
-        <FlatList
-          data={list}
-          renderItem={renderCoupon}
-          keyExtractor={(item) => item.assignmentId}
-          numColumns={2} 
-          columnWrapperStyle={styles.row} 
-          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 40 }]}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => load('refresh')}
-              tintColor={brand.blue}
-            />
-          }
-          ListHeaderComponent={() => (
-             !loading && !error && list.length > 0 ? (
-               <Text style={styles.countText}>
-                 {list.length} {activeTab.toLowerCase()} voucher{list.length === 1 ? '' : 's'}
-               </Text>
-             ) : null
-          )}
-          ListEmptyComponent={() => {
-            if (loading) return null;
-            if (error) {
+        <View style={styles.pagerWrap} onLayout={(e) => setPageWidth(e.nativeEvent.layout.width || SCREEN_WIDTH)}>
+          <ScrollView
+            ref={(r) => {
+              pagerRef.current = r;
+            }}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={onPagerMomentumEnd}
+            scrollEventThrottle={16}
+          >
+            {tabs.map((tab) => {
+              const list = listForTab[tab];
               return (
-                <View style={styles.emptyWrap}>
-                  <Text style={styles.emptyTitle}>Couldn’t load vouchers</Text>
-                  <Text style={styles.emptySub}>
-                    Please check your internet connection and try again.
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.emptyBtn}
-                    onPress={() => load('refresh')}
-                    activeOpacity={0.9}>
-                    <Text style={styles.emptyBtnText}>Retry</Text>
-                  </TouchableOpacity>
+                <View key={tab} style={{ width: pageWidth, flex: 1 }}>
+                  <FlatList
+                    data={list}
+                    renderItem={renderCouponForTab(tab)}
+                    keyExtractor={(item) => item.assignmentId}
+                    numColumns={2}
+                    columnWrapperStyle={styles.row}
+                    contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 40 }]}
+                    showsVerticalScrollIndicator={false}
+                    refreshControl={
+                      <RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor={brand.blue} />
+                    }
+                    ListHeaderComponent={() =>
+                      !loading && !error && list.length > 0 ? (
+                        <Text style={styles.countText}>
+                          {list.length} {tab.toLowerCase()} voucher{list.length === 1 ? '' : 's'}
+                        </Text>
+                      ) : null
+                    }
+                    ListEmptyComponent={() => {
+                      if (loading) return null;
+                      if (error) {
+                        return (
+                          <View style={styles.emptyWrap}>
+                            <Text style={styles.emptyTitle}>Couldn’t load vouchers</Text>
+                            <Text style={styles.emptySub}>Please check your internet connection and try again.</Text>
+                            <TouchableOpacity style={styles.emptyBtn} onPress={() => load('refresh')} activeOpacity={0.9}>
+                              <Text style={styles.emptyBtnText}>Retry</Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      }
+                      return (
+                        <View style={styles.emptyWrap}>
+                          <View style={styles.emptyIconPlaceholder}>
+                            <View style={styles.emptyShape} />
+                          </View>
+                          <Text style={styles.emptyTitle}>
+                            {tab === 'Used'
+                              ? 'No used vouchers'
+                              : tab === 'Expired'
+                              ? 'No expired vouchers'
+                              : 'No active vouchers'}
+                          </Text>
+                          <Text style={styles.emptySub}>
+                            {tab === 'Active'
+                              ? 'Shop at our partner stores to earn exclusive rewards and cashback vouchers.'
+                              : tab === 'Used'
+                              ? 'Vouchers you have successfully redeemed will appear in this history.'
+                              : 'Vouchers that have crossed their validity period will move here.'}
+                          </Text>
+                        </View>
+                      );
+                    }}
+                  />
                 </View>
               );
-            }
-            return (
-              <View style={styles.emptyWrap}>
-                <View style={styles.emptyIconPlaceholder}>
-                   <View style={styles.emptyShape} />
-                </View>
-                <Text style={styles.emptyTitle}>
-                  {activeTab === 'Used'
-                    ? 'No used vouchers'
-                    : activeTab === 'Expired'
-                      ? 'No expired vouchers'
-                      : 'No active vouchers'}
-                </Text>
-                <Text style={styles.emptySub}>
-                  {activeTab === 'Active'
-                    ? 'Shop at our partner stores to earn exclusive rewards and cashback vouchers.'
-                    : activeTab === 'Used'
-                      ? 'Vouchers you have successfully redeemed will appear in this history.'
-                      : 'Vouchers that have crossed their validity period will move here.'}
-                </Text>
-              </View>
-            );
-          }}
-        />
+            })}
+          </ScrollView>
+        </View>
       </View>
     </View>
   );
@@ -343,6 +377,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 16,
     overflow: 'hidden',
   },
+  pagerWrap: { flex: 1 },
   listContent: { paddingHorizontal: HORIZONTAL_PADDING, paddingTop: 24, flexGrow: 1 },
   countText: { fontSize: 12, color: '#8A94A6', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 16 },
 

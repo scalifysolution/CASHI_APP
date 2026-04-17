@@ -18,6 +18,7 @@ import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { apiRequest } from '../api/client';
 import { fetchMe } from '../store/authSlice';
 import { brand } from '../theme';
+import { formatINForDisplay } from '../utils/phone';
 
 // --- Professional Field Icons ---
 const FieldIcon = ({ type, focused }: { type: 'user' | 'phone' | 'mail'; focused?: boolean }) => {
@@ -184,7 +185,7 @@ export function EditProfileScreen({ navigation }: any) {
                 <FieldIcon type="phone" />
                 <TextInput
                   style={[styles.input, styles.inputTextDisabled]}
-                  value={form.phone}
+                  value={formatINForDisplay(form.phone)}
                   editable={false}
                 />
                 <LockIcon />

@@ -1,10 +1,13 @@
 // @refresh reset
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   RefreshControl,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -16,8 +19,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import { apiRequest } from '../api/client';
 import { API_BASE_URL } from '../config/env';
+import { RemoteAssetImage } from '../components/RemoteAssetImage';
 import { useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
+import { SegmentedTabs } from '../components/SegmentedTabs';
 
 // --- Professional High-Fidelity Icons ---
 const RewardIcon = ({ type, color, size = 16 }: { type: 'cash' | 'coin' | 'pts' | 'empty'; color: string; size?: number }) => (
@@ -51,12 +56,13 @@ type AvailableCoupon = {
   title: string;
   shortDescription: string | null;
   imageUrl: string | null;
-  cashiPointsCost: number;
+  cashiPointsCost?: number;
+  cashiCoinsCost?: number;
   shop: { id: string; name: string; imageUrl: string | null };
 };
 
 type RewardsData = {
-  cashiPoints: number;
+  cashiCoins: number;
   myCoupons: CouponAssignmentItem[];
   nearby: AvailableCoupon[];
 };
@@ -76,8 +82,18 @@ export function RewardsScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'Discover' | 'My Vouchers'>('Discover');
-  const [data, setData] = useState<RewardsData>({ cashiPoints: 0, myCoupons: [], nearby: [] });
+  const [data, setData] = useState<RewardsData>({ cashiCoins: 0, myCoupons: [], nearby: [] });
   const [claimingId, setClaimingId] = useState<string | null>(null);
+
+  const pagerRef = useRef<ScrollView | null>(null);
+  const [pageWidth, setPageWidth] = useState(0);
+  const tabs = useMemo(() => ['Discover', 'My Vouchers'] as const, []);
+  type Tab = (typeof tabs)[number];
+  const getCouponCost = useCallback(
+    (coupon: Pick<AvailableCoupon, 'cashiCoinsCost' | 'cashiPointsCost'>) =>
+      Math.max(0, Number(coupon.cashiCoinsCost ?? coupon.cashiPointsCost ?? 0)),
+    [],
+  );
 
   const load = useCallback(async (mode: 'initial' | 'refresh') => {
     if (!token) return;
@@ -92,7 +108,7 @@ export function RewardsScreen({ navigation }: any) {
       ]);
 
       setData({
-        cashiPoints: Number(dash?.cashiPoints?.available ?? 0),
+        cashiCoins: Number(dash?.cashiCoins?.available ?? dash?.cashiPoints?.available ?? 0),
         myCoupons: mine.active ?? [],
         nearby: avail?.items ?? [],
       });
@@ -107,7 +123,8 @@ export function RewardsScreen({ navigation }: any) {
   useEffect(() => { load('initial'); }, [load]);
 
   const claim = async (coupon: AvailableCoupon) => {
-    if (claimingId || data.cashiPoints < coupon.cashiPointsCost) return;
+    const couponCost = getCouponCost(coupon);
+    if (claimingId || data.cashiCoins < couponCost) return;
     setClaimingId(coupon.id);
     try {
       const res = await apiRequest<any>('/users/me/rewards/claim-coupon', {
@@ -117,7 +134,11 @@ export function RewardsScreen({ navigation }: any) {
       });
       setData(prev => ({
         ...prev,
-        cashiPoints: Number(res.cashiPoints?.available ?? prev.cashiPoints),
+        cashiCoins: Number(
+          res.cashiCoins?.available ??
+          res.cashiPoints?.available ??
+          Math.max(0, prev.cashiCoins - couponCost),
+        ),
         nearby: prev.nearby.filter(c => c.id !== coupon.id),
         myCoupons: [res.assignment, ...prev.myCoupons],
       }));
@@ -129,10 +150,17 @@ export function RewardsScreen({ navigation }: any) {
     }
   };
 
-  const listData = activeTab === 'Discover' ? data.nearby : data.myCoupons;
+  const dataForTab = useMemo(() => {
+    return {
+      Discover: data.nearby,
+      'My Vouchers': data.myCoupons,
+    } as const;
+  }, [data.myCoupons, data.nearby]);
 
-  const renderItem = ({ item }: { item: any }) => {
-    const isDiscover = activeTab === 'Discover';
+  const renderItemForTab =
+    (tab: Tab) =>
+    ({ item }: { item: any }) => {
+    const isDiscover = tab === 'Discover';
     const title = isDiscover ? item.title : item.coupon?.title;
     const img = assetUrl(isDiscover ? (item.imageUrl ?? item.shop?.imageUrl) : item.coupon?.imageUrl);
     const shopName = isDiscover ? item.shop?.name : 'Claimed Reward';
@@ -145,7 +173,7 @@ export function RewardsScreen({ navigation }: any) {
       >
         <View style={styles.storeCircle}>
           {img ? (
-            <Image source={{ uri: img }} style={styles.storeImg} />
+            <RemoteAssetImage uri={img} style={styles.storeImg} resizeMode="cover" />
           ) : (
             <Text style={styles.storeInitial}>{title?.[0]?.toUpperCase() ?? 'R'}</Text>
           )}
@@ -160,14 +188,14 @@ export function RewardsScreen({ navigation }: any) {
           {isDiscover ? (
             <TouchableOpacity 
               activeOpacity={0.8}
-              style={[styles.grabBtn, data.cashiPoints < item.cashiPointsCost && styles.grabBtnDisabled]}
+              style={[styles.grabBtn, data.cashiCoins < getCouponCost(item) && styles.grabBtnDisabled]}
               onPress={() => claim(item)}
-              disabled={claimingId === item.id || data.cashiPoints < item.cashiPointsCost}
+              disabled={claimingId === item.id || data.cashiCoins < getCouponCost(item)}
             >
               {claimingId === item.id ? (
                 <ActivityIndicator size="small" color="#FFF" />
               ) : (
-                <Text style={styles.grabBtnText}>{item.cashiPointsCost} pts</Text>
+                <Text style={styles.grabBtnText}>{getCouponCost(item)} Cashi Coins</Text>
               )}
             </TouchableOpacity>
           ) : (
@@ -179,6 +207,25 @@ export function RewardsScreen({ navigation }: any) {
         </View>
       </TouchableOpacity>
     );
+  };
+
+  const goToTab = (tab: Tab) => {
+    setActiveTab(tab);
+    const idx = tabs.indexOf(tab);
+    if (idx >= 0 && pageWidth) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: true });
+  };
+
+  useEffect(() => {
+    const idx = tabs.indexOf(activeTab);
+    if (idx >= 0 && pageWidth) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageWidth]);
+
+  const onPagerMomentumEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const idx = pageWidth ? Math.round(x / pageWidth) : 0;
+    const next = tabs[Math.max(0, Math.min(tabs.length - 1, idx))];
+    if (next && next !== activeTab) setActiveTab(next);
   };
 
   return (
@@ -198,16 +245,16 @@ export function RewardsScreen({ navigation }: any) {
         <View style={styles.heroContent}>
             <Text style={styles.heroGreeting}>Rewards Center</Text>
             <Text style={styles.heroSub}>
-              Redeem Cashi Points for exclusive vouchers and track your claimed rewards.
+              Redeem Cashi Coins for exclusive vouchers and track your claimed rewards.
             </Text>
 
             <View style={styles.balanceWidget}>
               <View style={styles.balanceItem}>
                 <View style={styles.balIconRow}>
                   <RewardIcon type="pts" color={brand.blue} size={14} />
-                  <Text style={[styles.balLabel, { color: brand.blue }]}>CASHI POINTS</Text>
+                  <Text style={[styles.balLabel, { color: brand.blue }]}>CASHI COINS</Text>
                 </View>
-                <Text style={[styles.balVal, { color: brand.blue }]}>{data.cashiPoints}</Text>
+                <Text style={[styles.balVal, { color: brand.blue }]}>{data.cashiCoins}</Text>
               </View>
 
               <View style={styles.balDivider} />
@@ -237,53 +284,71 @@ export function RewardsScreen({ navigation }: any) {
       <View style={styles.sheet}>
         <View style={styles.sheetHandle} />
 
-        <FlatList
-          data={listData}
-          renderItem={renderItem}
-          keyExtractor={(it, idx) => (it.assignmentId || it.id || idx.toString())}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor={brand.blue} />}
-          ListHeaderComponent={() => (
-            <View style={styles.listHeaderContainer}>
-              <View style={styles.segmentContainer}>
-                {(['Discover', 'My Vouchers'] as const).map((tab) => {
-                  const isActive = activeTab === tab;
-                  return (
-                    <TouchableOpacity
-                      key={tab}
-                      activeOpacity={0.8}
-                      onPress={() => setActiveTab(tab)}
-                      style={[styles.segmentTab, isActive && styles.activeSegment]}>
-                      <Text style={[styles.segmentLabel, isActive && styles.activeSegmentLabel]}>{tab}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+        <View style={styles.listHeaderContainer}>
+          <SegmentedTabs
+            options={tabs}
+            value={activeTab}
+            onChange={goToTab}
+            containerStyle={styles.segmentContainer}
+            tabStyle={styles.segmentTab}
+            indicatorStyle={styles.activeSegment}
+            textStyle={styles.segmentLabel}
+            activeTextStyle={styles.activeSegmentLabel}
+            inset={4}
+          />
 
-              <View style={styles.sectionTitleRow}>
-                <Text style={styles.sectionTitle}>
-                  {activeTab === 'Discover' ? 'Recommended for You' : 'Recent Claims'}
-                </Text>
-                {loading && <ActivityIndicator size="small" color={brand.blue} />}
-              </View>
-            </View>
-          )}
-          ListEmptyComponent={() => {
-            if (loading) return null;
-            return (
-              <View style={styles.emptyState}>
-                <RewardIcon type="empty" color={brand.helperColor} size={32} />
-                <Text style={styles.emptyTitle}>No rewards found</Text>
-                <Text style={styles.emptySub}>
-                  {activeTab === 'Discover' 
-                    ? "Check back later for new nearby offers." 
-                    : "You haven't claimed any vouchers yet."}
-                </Text>
-              </View>
-            );
-          }}
-        />
+          <View style={styles.sectionTitleRow}>
+            <Text style={styles.sectionTitle}>
+              {activeTab === 'Discover' ? 'Recommended for You' : 'Recent Claims'}
+            </Text>
+            {loading && <ActivityIndicator size="small" color={brand.blue} />}
+          </View>
+        </View>
+
+        <View style={styles.pagerWrap} onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}>
+          <ScrollView
+            ref={(r) => {
+              pagerRef.current = r;
+            }}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={onPagerMomentumEnd}
+            scrollEventThrottle={16}
+          >
+            {tabs.map((tab) => {
+              const list = dataForTab[tab];
+              return (
+                <View key={tab} style={{ width: pageWidth || 1, flex: 1 }}>
+                  <FlatList
+                    data={list}
+                    renderItem={renderItemForTab(tab)}
+                    keyExtractor={(it, idx) => (it.assignmentId || it.id || idx.toString())}
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+                    refreshControl={
+                      <RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor={brand.blue} />
+                    }
+                    ListEmptyComponent={() => {
+                      if (loading) return null;
+                      return (
+                        <View style={styles.emptyState}>
+                          <RewardIcon type="empty" color={brand.helperColor} size={32} />
+                          <Text style={styles.emptyTitle}>No rewards found</Text>
+                          <Text style={styles.emptySub}>
+                            {tab === 'Discover'
+                              ? 'Check back later for new nearby offers.'
+                              : "You haven't claimed any vouchers yet."}
+                          </Text>
+                        </View>
+                      );
+                    }}
+                  />
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
       </View>
     </View>
   );
@@ -323,6 +388,7 @@ const styles = StyleSheet.create({
   // Sheet Area (Exact MyLoyalty Pattern)
   sheet: { flex: 1, backgroundColor: '#F8F9FB', borderTopLeftRadius: 32, borderTopRightRadius: 32, marginTop: -24 },
   sheetHandle: { width: 40, height: 5, backgroundColor: '#E2E5F1', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 20 },
+  pagerWrap: { flex: 1 },
   
   listHeaderContainer: { paddingHorizontal: 24 },
   segmentContainer: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 14, padding: 4, marginBottom: 24 },

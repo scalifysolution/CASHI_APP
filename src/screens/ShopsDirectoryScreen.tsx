@@ -28,6 +28,7 @@ type ShopItem = {
   id: string;
   name: string;
   username: string;
+  cashiTag?: string | null;
   city: string | null;
   state: string | null;
   imageUrl: string | null;
@@ -186,7 +187,7 @@ export function ShopsDirectoryScreen({ navigation }: any) {
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="Search by name or @username"
+            placeholder="Search by name or @cashiTag"
             placeholderTextColor="rgba(255,255,255,0.4)"
             style={styles.searchInput}
             autoCapitalize="none"
@@ -227,6 +228,8 @@ export function ShopsDirectoryScreen({ navigation }: any) {
           renderItem={({ item }) => {
             const img = assetUrl(item.imageUrl);
             const location = [item.city, item.state].filter(Boolean).join(', ');
+            const handleRaw = String((item.cashiTag ?? item.username) ?? '').trim();
+            const handle = handleRaw ? (handleRaw.startsWith('@') ? handleRaw : `@${handleRaw}`) : '';
             
             return (
               <TouchableOpacity
@@ -255,9 +258,11 @@ export function ShopsDirectoryScreen({ navigation }: any) {
                   <Text style={styles.name} numberOfLines={1}>
                     {item.name}
                   </Text>
-                  <Text style={styles.username} numberOfLines={1}>
-                    @{item.username}
-                  </Text>
+                  {!!handle && (
+                    <Text style={styles.username} numberOfLines={1}>
+                      {handle}
+                    </Text>
+                  )}
                   <Text style={styles.city} numberOfLines={1}>
                     {location || 'Location unavailable'}
                   </Text>

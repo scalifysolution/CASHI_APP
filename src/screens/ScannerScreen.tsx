@@ -12,11 +12,17 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Camera } from 'react-native-camera-kit';
+import { CameraKitModule } from '../native/CameraKitModule';
+import { useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
 
 export function ScannerScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
-  const [hasPermission, setHasPermission] = useState(Platform.OS === 'ios');
+  const userId = useAppSelector((s) => s.user.id);
+  const displayName = useAppSelector((s) => s.user.displayName);
+  const phone = useAppSelector((s) => s.user.phone);
+  const [hasPermission, setHasPermission] = useState(false);
+  const [permissionChecked, setPermissionChecked] = useState(false);
   const [hasScanned, setHasScanned] = useState(false);
 
   const close = useCallback(() => {
@@ -29,10 +35,51 @@ export function ScannerScreen({ navigation }: any) {
   }, [navigation]);
 
   useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    void PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA).then((granted) => {
-      setHasPermission(Boolean(granted));
-    });
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        if (Platform.OS === 'android') {
+          const granted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA);
+          if (!cancelled) setHasPermission(Boolean(granted));
+          return;
+        }
+
+        if (!CameraKitModule) {
+          if (!cancelled) {
+            setHasPermission(false);
+            setPermissionChecked(true);
+          }
+          return;
+        }
+
+        // iOS: check current status; request once when entering scanner.
+        const granted = await CameraKitModule.checkDeviceCameraAuthorizationStatus();
+        if (!cancelled) setHasPermission(Boolean(granted));
+        if (!granted) {
+          const requested = await CameraKitModule.requestDeviceCameraAuthorization();
+          if (!cancelled) setHasPermission(Boolean(requested));
+        }
+      } catch {
+        if (!cancelled) setHasPermission(false);
+      } finally {
+        if (!cancelled) setPermissionChecked(true);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const openAppSettings = useCallback(async () => {
+    try {
+      await Linking.openSettings();
+    } catch {
+      // Fallback for older RN / platforms
+      await Linking.openURL('app-settings:');
+    }
   }, []);
 
   const handleInvalid = useCallback(() => {
@@ -43,6 +90,26 @@ export function ScannerScreen({ navigation }: any) {
       },
     ]);
   }, [close]);
+
+  const buildReviewLinkWithUser = useCallback(
+    (rawLink: string) => {
+      try {
+        const url = new URL(rawLink);
+        const pathname = (url.pathname || '').toLowerCase();
+        if (pathname !== '/review') return null;
+        if (!url.searchParams.get('shopId') || !url.searchParams.get('category')) {
+          return null;
+        }
+        if (userId) url.searchParams.set('userId', userId);
+        if (displayName?.trim()) url.searchParams.set('name', displayName.trim());
+        if (phone?.trim()) url.searchParams.set('phone', phone.trim());
+        return url.toString();
+      } catch {
+        return null;
+      }
+    },
+    [displayName, phone, userId],
+  );
 
   const onReadCode = useCallback(
     (event: any) => {
@@ -66,6 +133,17 @@ export function ScannerScreen({ navigation }: any) {
 
       const app = String(payload?.app ?? '').toLowerCase();
       const link = typeof payload?.link === 'string' ? payload.link.trim() : '';
+      const directReviewLink = buildReviewLinkWithUser(text);
+      const payloadReviewLink = link ? buildReviewLinkWithUser(link) : null;
+
+      if (directReviewLink) {
+        navigation.navigate('WebPage', {
+          title: 'Review',
+          url: directReviewLink,
+        });
+        setTimeout(close, 150);
+        return;
+      }
 
       if (app !== 'cashi' || !link) {
         handleInvalid();
@@ -73,19 +151,69 @@ export function ScannerScreen({ navigation }: any) {
         return;
       }
 
-      void Linking.openURL(link)
+      if (payloadReviewLink) {
+        navigation.navigate('WebPage', {
+          title: 'Review',
+          url: payloadReviewLink,
+        });
+        setTimeout(close, 150);
+        return;
+      }
+
+      Linking.openURL(link)
         .catch(() => {})
         .finally(() => {
           close();
         });
     },
-    [close, handleInvalid, hasScanned],
+    [buildReviewLinkWithUser, close, handleInvalid, hasScanned, navigation],
   );
 
   const permissionTitle = useMemo(() => {
     if (Platform.OS === 'android') return 'Camera permission required';
     return 'Camera permission required';
   }, []);
+
+  const requestAndroidPermission = useCallback(async () => {
+    const res = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
+    if (res === PermissionsAndroid.RESULTS.GRANTED) {
+      setHasPermission(true);
+      return;
+    }
+
+    setHasPermission(false);
+
+    if (res === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+      Alert.alert('Camera permission blocked', 'Enable camera access in Settings to scan QR codes.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Settings', onPress: openAppSettings },
+      ]);
+    }
+  }, [openAppSettings]);
+
+  const requestIosPermission = useCallback(async () => {
+    try {
+      if (!CameraKitModule) {
+        setHasPermission(false);
+        setPermissionChecked(true);
+        return;
+      }
+
+      const requested = await CameraKitModule.requestDeviceCameraAuthorization();
+      setHasPermission(Boolean(requested));
+      setPermissionChecked(true);
+
+      if (!requested) {
+        Alert.alert('Camera permission denied', 'Enable camera access in Settings to scan QR codes.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: openAppSettings },
+        ]);
+      }
+    } catch {
+      setHasPermission(false);
+      setPermissionChecked(true);
+    }
+  }, [openAppSettings]);
 
   return (
     <View style={styles.container}>
@@ -97,6 +225,13 @@ export function ScannerScreen({ navigation }: any) {
           cameraType="back"
           scanBarcode
           onReadCode={onReadCode}
+          onError={(e) => {
+            const msg = e?.nativeEvent?.errorMessage || 'Camera failed to initialize.';
+            Alert.alert('Camera error', msg, [
+              { text: 'Close', onPress: close },
+              { text: 'Open Settings', onPress: openAppSettings },
+            ]);
+          }}
           showFrame={false}
           laserColor="transparent"
           frameColor="transparent"
@@ -105,19 +240,23 @@ export function ScannerScreen({ navigation }: any) {
         <View style={styles.permissionWrap}>
           <Text style={styles.permissionTitle}>{permissionTitle}</Text>
           <Text style={styles.permissionBody}>
-            Enable camera access to scan QR codes.
+            {permissionChecked ? 'Enable camera access to scan QR codes.' : 'Checking camera permission…'}
           </Text>
           {Platform.OS === 'android' ? (
             <TouchableOpacity
               style={styles.permissionBtn}
               activeOpacity={0.85}
-              onPress={async () => {
-                const res = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
-                setHasPermission(res === PermissionsAndroid.RESULTS.GRANTED);
-              }}>
+              onPress={requestAndroidPermission}>
               <Text style={styles.permissionBtnText}>Allow camera</Text>
             </TouchableOpacity>
-          ) : null}
+          ) : (
+            <TouchableOpacity
+              style={styles.permissionBtn}
+              activeOpacity={0.85}
+              onPress={requestIosPermission}>
+              <Text style={styles.permissionBtnText}>Allow camera</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 

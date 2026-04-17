@@ -24,6 +24,7 @@ import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { apiRequest } from '../api/client';
 import { API_BASE_URL } from '../config/env';
 import { LocationPickerModal } from '../components/LocationPickerModal';
+import { RemoteAssetImage } from '../components/RemoteAssetImage';
 import { logout } from '../store/authSlice';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
@@ -77,7 +78,8 @@ export function HomeScreen() {
   const memberQrValue = useMemo(() => buildMemberQrPayload(memberUserId), [memberUserId]);
 
   const [dash, setDash] = useState<{
-    points: { available: number; earned: number; redeemed: number };
+    cashiCoins: { available: number; earned: number; spent: number };
+    cashiPoints?: { available: number; earned?: number; redeemed?: number };
     cashback: { savedAmount: number };
     coupons: { active: number; used: number; expired: number };
   } | null>(null);
@@ -87,6 +89,16 @@ export function HomeScreen() {
   >([]);
   const [activeCoupons, setActiveCoupons] = useState<
     { assignmentId: string; coupon: { id: string; title: string; shortDescription: string | null; minOrderValue: number | null } | null }[]
+  >([]);
+  const [marketplaceCoupons, setMarketplaceCoupons] = useState<
+    {
+      id: string;
+      title: string;
+      shortDescription: string | null;
+      imageUrl: string | null;
+      cashiPointsCost: number;
+      shop: { id: string; name: string; imageUrl: string | null };
+    }[]
   >([]);
   const [locationTag, setLocationTag] = useState('Browse stores');
   const [locationFormattedAddress, setLocationFormattedAddress] = useState('');
@@ -129,7 +141,7 @@ export function HomeScreen() {
           longitude: coords.longitude,
           ...(locationAddress?.trim() ? { locationAddress: locationAddress.trim() } : {}),
         },
-      }).catch(() => {});
+      }).catch(() => { });
     },
     [token],
   );
@@ -171,7 +183,7 @@ export function HomeScreen() {
       await setCustomerPinnedLocation(null);
       const locationResult = await requestLocationCoords();
       if (locationResult.permissionDenied) {
-        await Linking.openSettings().catch(() => {});
+        await Linking.openSettings().catch(() => { });
         return;
       }
       const coords = locationResult.coords;
@@ -213,7 +225,7 @@ export function HomeScreen() {
       await setCustomerPinnedLocation(null);
       const locationResult = await requestLocationCoords();
       if (locationResult.permissionDenied) {
-        await Linking.openSettings().catch(() => {});
+        await Linking.openSettings().catch(() => { });
         return;
       }
       const coords = locationResult.coords;
@@ -252,7 +264,7 @@ export function HomeScreen() {
   const handleLogout = useCallback(async () => {
     setLocationActionBusy(true);
     try {
-      await dispatch(logout()).unwrap().catch(() => {});
+      await dispatch(logout()).unwrap().catch(() => { });
     } finally {
       setLocationActionBusy(false);
     }
@@ -305,7 +317,7 @@ export function HomeScreen() {
                 .then(() => {
                   lastSyncedLocationRef.current = coords;
                 })
-                .catch(() => {});
+                .catch(() => { });
             }
           } else {
             setLocationTag('Location');
@@ -348,7 +360,7 @@ export function HomeScreen() {
                 .then(() => {
                   lastSyncedLocationRef.current = coords;
                 })
-                .catch(() => {});
+                .catch(() => { });
             }
           }
 
@@ -373,10 +385,11 @@ export function HomeScreen() {
           }
 
           let dash: {
-            points: { available: number; earned: number; redeemed: number };
+            cashiCoins: { available: number; earned: number; spent: number };
+            cashiPoints?: { available: number };
             cashback: { savedAmount: number };
             coupons: { active: number; used: number; expired: number };
-          } | null = { points: { available: 0, earned: 0, redeemed: 0 }, cashback: { savedAmount: 0 }, coupons: { active: 0, used: 0, expired: 0 } };
+          } | null = { cashiCoins: { available: 0, earned: 0, spent: 0 }, cashback: { savedAmount: 0 }, coupons: { active: 0, used: 0, expired: 0 } };
           try {
             dash = await apiRequest<any>('/users/me/dashboard', { method: 'GET', token });
           } catch (e) {
@@ -386,19 +399,28 @@ export function HomeScreen() {
           if (!alive) return;
 
           let coupons: { active: any[] } = { active: [] };
+          let rewardsAvail: { items: any[] } = { items: [] };
           try {
-            coupons = await apiRequest<{ active: any[] }>('/users/me/coupons', {
-              method: 'GET',
-              token,
-            });
+            [coupons, rewardsAvail] = await Promise.all([
+              apiRequest<{ active: any[] }>('/users/me/coupons', {
+                method: 'GET',
+                token,
+              }).catch(() => ({ active: [] })),
+              apiRequest<{ items: any[] }>('/users/me/rewards/available-coupons?radiusKm=15&limit=5', {
+                method: 'GET',
+                token,
+              }).catch(() => ({ items: [] })),
+            ]);
           } catch {
             coupons = { active: [] };
+            rewardsAvail = { items: [] };
           }
           if (!alive) return;
 
           setDash(dash);
           setNearby(shops.items ?? []);
           setActiveCoupons((coupons.active ?? []).slice(0, 4));
+          setMarketplaceCoupons((rewardsAvail.items ?? []).slice(0, 5));
           hasLoadedOnceRef.current = true;
         } finally {
           if (alive && showBlockingLoader) setLoading(false);
@@ -412,16 +434,17 @@ export function HomeScreen() {
 
   /**
    * Business meaning:
-   * - Loyalty points == COINS (₹1 per coin) => use points.available (remaining)
-   * - "Points" are Cashi points (separate system; not implemented yet) => show 0 for now
+   * - Cashi Points: loyalty points / rewards balance => cashiPoints.available
+   * - Cashi Coins: coins earned from shopping savings => cashiCoins.available
    */
-  const pointsText = useMemo(() => '0', []);
-  const coinsText = useMemo(() => String(dash?.points?.available ?? 0), [dash]);
+  const pointsText = useMemo(() => String((dash as any)?.cashiPoints?.available ?? 0), [dash]);
+  const coinsText = useMemo(() => String(dash?.cashiCoins?.available ?? 0), [dash]);
   const cashbackText = useMemo(() => `₹${dash?.cashback?.savedAmount ?? 0}`, [dash]);
   const helloName = (displayName?.trim() ? displayName.trim() : 'there');
   const showNearby = nearby.length > 0;
   const showVouchers = activeCoupons.length > 0;
-  
+  const showMarketplace = marketplaceCoupons.length > 0;
+
   const locationPillLine =
     (locationTag.trim() && locationTag !== 'Location' ? locationTag.trim() : '') ||
     locationFormattedAddress.trim() ||
@@ -454,20 +477,20 @@ export function HomeScreen() {
               <Text style={styles.qrModalCloseText}>✕</Text>
             </TouchableOpacity>
           </View>
-          
+
           <Text style={styles.qrModalDesc}>
-            Show this Cashi Card at the shop to earn coins and cashback.
+            Show this Cashi Card at the shop to earn Cashi Coins and cashback.
           </Text>
-          
+
           <View style={styles.qrBigBox}>
-             <QRCode 
-               value={memberQrValue} 
-               size={SCREEN_WIDTH * 0.65} 
-               color={brand.dark} 
-               backgroundColor="#FFFFFF" 
-             />
+            <QRCode
+              value={memberQrValue}
+              size={SCREEN_WIDTH * 0.65}
+              color={brand.dark}
+              backgroundColor="#FFFFFF"
+            />
           </View>
-          
+
           <Text style={styles.qrModalUserId} selectable>
             MEMBER ID: {memberIdMasked(memberUserId)}
           </Text>
@@ -485,7 +508,7 @@ export function HomeScreen() {
         <View style={styles.logoutOverlay}>
           <View style={styles.locationGateCard}>
             <View style={styles.gateIconWrap}>
-                <GeometricPin />
+              <GeometricPin />
             </View>
             <Text style={styles.logoutOverlayTitle}>Enable Location Access</Text>
             <Text style={styles.logoutOverlayDesc}>
@@ -522,14 +545,14 @@ export function HomeScreen() {
       </>
     );
   }
-  
+
   if (serviceUnavailableAtLocation) {
     return (
       <>
         <View style={styles.logoutOverlay}>
           <View style={styles.locationGateCard}>
             <View style={styles.gateIconWrap}>
-                <GeometricPin />
+              <GeometricPin />
             </View>
             <Text style={styles.logoutOverlayTitle}>Service Unavailable</Text>
             <Text style={styles.logoutOverlayDesc}>
@@ -556,7 +579,7 @@ export function HomeScreen() {
       </>
     );
   }
-  
+
   if (loading && !hasLoadedOnceRef.current) {
     return (
       <View style={styles.homeLoadingOverlay}>
@@ -571,161 +594,123 @@ export function HomeScreen() {
   return (
     <>
       <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
+        <StatusBar barStyle="light-content" />
 
-      {/* --- PREMIUM MESH HERO --- */}
-      <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
-        <View style={styles.topBar}>
-          <View style={styles.topBarLeft}>
-            <TouchableOpacity
-              onPress={() => setMenuVisible(true)}
-              accessibilityRole="button"
-              accessibilityLabel="Open menu"
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              style={styles.menuHit}
-              activeOpacity={0.7}>
-              <MenuIcon />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.topBarCenter}>
-            <TouchableOpacity 
-              style={styles.topLocationSelector} 
-              onPress={() => setLocationModalVisible(true)}
-              activeOpacity={0.8}>
+        {/* --- PREMIUM MESH HERO --- */}
+        <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
+          <View style={styles.topBar}>
+            <View style={styles.topBarLeft}>
+              <TouchableOpacity
+                onPress={() => setMenuVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Open menu"
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={styles.menuHit}
+                activeOpacity={0.7}>
+                <MenuIcon />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.topBarCenter}>
+              <TouchableOpacity
+                style={styles.topLocationSelector}
+                onPress={() => setLocationModalVisible(true)}
+                activeOpacity={0.8}>
                 <GeometricPin />
                 <Text style={styles.topLocationText} numberOfLines={1}>{locationPillLine}</Text>
                 <View style={styles.chevronDown} />
-            </TouchableOpacity>
-          </View>
+              </TouchableOpacity>
+            </View>
 
-          <View style={styles.topBarRight}>
-             <TouchableOpacity
+            <View style={styles.topBarRight}>
+              <TouchableOpacity
                 activeOpacity={0.7}
                 onPress={() => navigation.navigate('Invite')}
                 accessibilityRole="button">
                 <Text style={styles.inviteLink}>Invite</Text>
               </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.balanceHeader}>
-          <View style={styles.greetingRow}>
-            <Text style={styles.greetingText} numberOfLines={1}>
-              Hello, {helloName}
-            </Text>
-          </View>
-          <View style={styles.statsContainer}>
-            <View style={styles.statBox}>
-              <Text style={styles.statVal}>{pointsText}</Text>
-              <Text style={styles.statTag}>CASHI POINTS</Text>
-            </View>
-            <View style={styles.dividerInner} />
-            <View style={styles.statBox}>
-              <Text style={styles.statVal}>{coinsText}</Text>
-              <Text style={styles.statTag}>COINS</Text>
-            </View>
-            <View style={styles.dividerInner} />
-            <View style={styles.statBox}>
-              <Text style={styles.statVal}>{cashbackText}</Text>
-              <Text style={styles.statTag}>CASHBACK</Text>
             </View>
           </View>
-        </View>
-      </View>
 
-      {/* --- CONTENT SHEET --- */}
-      <View style={styles.mainSheet}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
-          <View style={styles.sheetHandle} />
-
-          {/* 1. THE CASHI CARD */}
-          <TouchableOpacity activeOpacity={0.96} style={styles.walletCard} onPress={() => setQrModalVisible(true)}>
-            {/* Abstract Premium Background Elements */}
-            <View style={styles.cardGlow} />
-            <View style={styles.cardCircle1} />
-            <View style={styles.cardCircle2} />
-
-            <View style={styles.cardHeader}>
-              <View style={styles.tierPill}>
-                <Text style={styles.tierText}>CASHI CARD</Text>
+          <View style={styles.balanceHeader}>
+            <View style={styles.greetingRow}>
+              <Text style={styles.greetingText} numberOfLines={1}>
+                Hello, {helloName}
+              </Text>
+            </View>
+            <View style={styles.statsContainer}>
+              <View style={styles.statBox}>
+                <Text style={styles.statVal}>{pointsText}</Text>
+                <Text style={styles.statTag}>CASHI POINTS</Text>
               </View>
-              <Text style={styles.cardProvider}>CASHI</Text>
+              <View style={styles.dividerInner} />
+              <View style={styles.statBox}>
+                <Text style={styles.statVal}>{coinsText}</Text>
+                <Text style={styles.statTag}>CASHI COINS</Text>
+              </View>
+              <View style={styles.dividerInner} />
+              <View style={styles.statBox}>
+                <Text style={styles.statVal}>{cashbackText}</Text>
+                <Text style={styles.statTag}>CASHBACK</Text>
+              </View>
             </View>
-            
-            <View style={styles.cardMiddle}>
-              <View style={styles.cardTextWrap}>
-                <Text style={styles.cardName}>Cashi Card</Text>
-                <Text style={styles.cardDetail}>Scan at the shop to earn instantly</Text>
-                
-                {/* Visual Member ID inside the pass for realism */}
-                <View style={styles.memberIdWrap}>
-                   <Text style={styles.memberIdLabel}>MEMBER ID: </Text>
-                   <Text style={styles.memberIdVal}>{memberIdMasked(memberUserId)}</Text>
+          </View>
+        </View>
+
+        {/* --- CONTENT SHEET --- */}
+        <View style={styles.mainSheet}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+            <View style={styles.sheetHandle} />
+
+            {/* 1. THE CASHI CARD */}
+            <TouchableOpacity activeOpacity={0.96} style={styles.walletCard} onPress={() => setQrModalVisible(true)}>
+              {/* Abstract Premium Background Elements */}
+              <View style={styles.cardGlow} />
+              <View style={styles.cardCircle1} />
+              <View style={styles.cardCircle2} />
+
+              <View style={styles.cardHeader}>
+                <View style={styles.tierPill}>
+                  <Text style={styles.tierText}>CASHI CARD</Text>
+                </View>
+                <Text style={styles.cardProvider}>CASHI</Text>
+              </View>
+
+              <View style={styles.cardMiddle}>
+                <View style={styles.cardTextWrap}>
+                  <Text style={styles.cardName}>Cashi Card</Text>
+                  <Text style={styles.cardDetail}>Scan at the shop to earn instantly</Text>
+
+                  {/* Visual Member ID inside the pass for realism */}
+                  <View style={styles.memberIdWrap}>
+                    <Text style={styles.memberIdLabel}>MEMBER ID: </Text>
+                    <Text style={styles.memberIdVal}>{memberIdMasked(memberUserId)}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.glassQRBox}>
+                  <QRCode
+                    value={memberQrValue}
+                    size={56} /* Taller card allows a slightly bigger QR */
+                    color={brand.dark}
+                    backgroundColor="#FFFFFF"
+                  />
                 </View>
               </View>
-              
-              <View style={styles.glassQRBox}>
-                 <QRCode 
-                   value={memberQrValue} 
-                   size={56} /* Taller card allows a slightly bigger QR */
-                   color={brand.dark} 
-                   backgroundColor="#FFFFFF" 
-                 />
-              </View>
-            </View>
-          </TouchableOpacity>
+            </TouchableOpacity>
 
-          {/* 2. DISCOVER MERCHANTS (Nearby Partners) */}
-          <View style={styles.sectionTitleRow}>
-            <Text style={styles.sectionHeading}>Nearby Partners</Text>
-            {showNearby && nearby.length > 1 ? (
-              <TouchableOpacity onPress={() => navigation.navigate('ShopsDirectory')}>
-                <Text style={styles.actionText}>See all</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          
-          {showNearby ? (
-            nearby.length === 1 ? (
-              // FULL WIDTH SINGLE ITEM LAYOUT (1 Shop found)
-              <View style={styles.singleMerchantWrap}>
-                 <TouchableOpacity
-                  style={styles.singleMerchantCard}
-                  activeOpacity={0.9}
-                  onPress={() => navigation.navigate('ShopDetail', { shop: nearby[0] })}>
-                  <View style={styles.singleMerchantLogoWrap}>
-                    {nearby[0].imageUrl && !failedShopImages[nearby[0].id] ? (
-                      <Image
-                        source={{ uri: assetUrl(nearby[0].imageUrl) ?? undefined }}
-                        style={styles.singleMerchantLogoImage} 
-                        resizeMode="cover"
-                        onError={() =>
-                          setFailedShopImages((prev) => ({ ...prev, [nearby[0].id]: true }))
-                        }
-                      />
-                    ) : (
-                      <Text style={styles.merchantInit}>
-                        {(nearby[0].name?.[0] ?? 'S').toUpperCase()}
-                      </Text>
-                    )}
-                  </View>
-                  <View style={styles.singleMerchantDetails}>
-                    <View style={styles.merchantNameBlock}>
-                      <Text style={styles.singleMerchantTitle} numberOfLines={1}>{nearby[0].name}</Text>
-                      <View style={styles.rewardTag}>
-                        <Text style={styles.rewardTagText}>
-                          {nearby[0].distanceKm != null ? `${nearby[0].distanceKm} km away` : 'OFFICIAL PARTNER'}
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-                  <View style={styles.singleMerchantChevron}>
-                      <View style={[styles.chevronDown, { transform: [{ rotate: '-90deg' }], borderTopColor: brand.blue }]} />
-                  </View>
+            {/* 2. DISCOVER MERCHANTS (Nearby Partners) */}
+            <View style={styles.sectionTitleRow}>
+              <Text style={styles.sectionHeading}>Nearby Partners</Text>
+              {showNearby && nearby.length > 1 ? (
+                <TouchableOpacity onPress={() => navigation.navigate('ShopsDirectory')}>
+                  <Text style={styles.actionText}>See all</Text>
                 </TouchableOpacity>
-              </View>
-            ) : (
+              ) : null}
+            </View>
+
+            {showNearby ? (
+
               // HORIZONTAL SCROLL FOR MULTIPLE ITEMS (> 1 Shop found)
               <ScrollView
                 horizontal
@@ -766,90 +751,145 @@ export function HomeScreen() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-            )
-          ) : (
-            <View style={styles.noNearbyWrap}>
-              <Text style={styles.noNearbyText}>
-                We are not present at your location now.
-              </Text>
-            </View>
-          )}
 
-          {/* 3. YOUR BEST DEALS (Voucher Style) */}
-          {showVouchers ? (
-            <>
-              <View style={styles.sectionTitleRow}>
-                <Text style={styles.sectionHeading}>Active Vouchers</Text>
-                <TouchableOpacity onPress={() => navigation.navigate('Coupons')}>
-                  <Text style={styles.actionText}>Browse All</Text>
-                </TouchableOpacity>
+            ) : (
+              <View style={styles.noNearbyWrap}>
+                <Text style={styles.noNearbyText}>
+                  We are not present at your location now.
+                </Text>
               </View>
+            )}
 
-              {activeCoupons.map((it, i) => {
-                const c = it.coupon;
-                return (
-                  <TouchableOpacity
-                    key={it.assignmentId}
-                    style={styles.voucherRow}
-                    activeOpacity={0.9}
-                    onPress={() => navigation.navigate('CouponPass', { item: it })}>
-                    <View
-                      style={[
-                        styles.voucherAccent,
-                        { backgroundColor: i % 2 === 0 ? brand.blue : '#FF5252' },
-                      ]}
-                    />
-                    <View style={styles.voucherContent}>
-                      <Text style={styles.vouchLabel}>{c?.title ?? 'Coupon'}</Text>
-                      <Text style={styles.vouchMain}>
-                        {c?.shortDescription ?? 'Tap to view'}
-                      </Text>
-                      <Text style={styles.vouchSub}>
-                        {c?.minOrderValue
-                          ? `Valid on orders above ₹${c.minOrderValue}`
-                          : 'Valid at partner store'}
-                      </Text>
-                    </View>
-                    <View style={styles.voucherAction}>
-                      <View style={styles.usePill}>
-                        <Text style={styles.usePillText}>USE</Text>
-                      </View>
-                    </View>
+            {/* 3. YOUR BEST DEALS (Voucher Style) */}
+            {showVouchers ? (
+              <>
+                <View style={styles.sectionTitleRow}>
+                  <Text style={styles.sectionHeading}>Active Vouchers</Text>
+                  <TouchableOpacity onPress={() => navigation.navigate('Coupons')}>
+                    <Text style={styles.actionText}>Browse All</Text>
                   </TouchableOpacity>
-                );
-              })}
-            </>
-          ) : null}
+                </View>
 
-          {/* 4. SMART QUICK-ACTION WIDGET */}
-          <TouchableOpacity
-            style={styles.quickActionCard}
-            activeOpacity={0.9}
-            onPress={() => navigation.navigate('Scanner')}
-          >
-             <View style={styles.quickActionLeft}>
+                {activeCoupons.map((it, i) => {
+                  const c = it.coupon;
+                  return (
+                    <TouchableOpacity
+                      key={it.assignmentId}
+                      style={styles.voucherRow}
+                      activeOpacity={0.9}
+                      onPress={() => navigation.navigate('CouponPass', { item: it })}>
+                      <View
+                        style={[
+                          styles.voucherAccent,
+                          { backgroundColor: i % 2 === 0 ? brand.blue : '#FF5252' },
+                        ]}
+                      />
+                      <View style={styles.voucherContent}>
+                        <Text style={styles.vouchLabel}>{c?.title ?? 'Coupon'}</Text>
+                        <Text style={styles.vouchMain}>
+                          {c?.shortDescription ?? 'Tap to view'}
+                        </Text>
+                        <Text style={styles.vouchSub}>
+                          {c?.minOrderValue
+                            ? `Valid on orders above ₹${c.minOrderValue}`
+                            : 'Valid at partner store'}
+                        </Text>
+                      </View>
+                      <View style={styles.voucherAction}>
+                        <View style={styles.usePill}>
+                          <Text style={styles.usePillText}>USE</Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </>
+            ) : null}
+
+            {/* 4. SMART QUICK-ACTION WIDGET */}
+            <TouchableOpacity
+              style={styles.quickActionCard}
+              activeOpacity={0.9}
+              onPress={() => navigation.navigate('Scanner')}
+            >
+              <View style={styles.quickActionLeft}>
                 <View style={styles.liveIndicator}>
-                   <View style={styles.livePulse} />
-                   <Text style={styles.liveText}>SCAN & PAY ACTIVE</Text>
+                  <View style={styles.livePulse} />
+                  <Text style={styles.liveText}>SCAN & PAY ACTIVE</Text>
                 </View>
                 <Text style={styles.quickTitle}>Instant Coin Accrual</Text>
                 <Text style={styles.quickDesc}>Show your QR at checkout to earn</Text>
                 <View style={styles.quickBtn}>
-                   <Text style={styles.quickBtnText}>Launch Scanner</Text>
+                  <Text style={styles.quickBtnText}>Launch Scanner</Text>
                 </View>
-             </View>
-             <View style={styles.quickIconContainer}>
-                <QRCode 
-                   value="mock" 
-                   size={100} 
-                   color="rgba(255,255,255,0.15)" 
-                   backgroundColor="transparent" 
-                 />
-             </View>
-          </TouchableOpacity>
+              </View>
+              <View style={styles.quickIconContainer}>
+                <QRCode
+                  value="mock"
+                  size={100}
+                  color="rgba(255,255,255,0.15)"
+                  backgroundColor="transparent"
+                />
+              </View>
+            </TouchableOpacity>
 
-        </ScrollView>
-      </View>
+            {showMarketplace ? (
+              <>
+                <View style={styles.sectionTitleRow}>
+                  <Text style={styles.sectionHeading}>Rewards Marketplace</Text>
+                  <TouchableOpacity onPress={() => navigation.navigate('Rewards')}>
+                    <Text style={styles.actionText}>Browse All</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.marketplaceScroll}>
+                  {marketplaceCoupons.map((coupon, i) => {
+                    const img = assetUrl(coupon.imageUrl ?? coupon.shop?.imageUrl ?? null);
+                    return (
+                      <TouchableOpacity
+                        key={coupon.id ?? i}
+                        style={styles.marketplaceCard}
+                        activeOpacity={0.9}
+                        onPress={() => navigation.navigate('Rewards')}>
+                        <View style={styles.marketplaceImageWrap}>
+                          {img ? (
+                            <RemoteAssetImage uri={img} style={styles.marketplaceImage} resizeMode="cover" />
+                          ) : (
+                            <Text style={styles.marketplaceInitial}>
+                              {(coupon.title?.[0] ?? 'R').toUpperCase()}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={styles.marketplaceBody}>
+                          <Text style={styles.marketplaceTitle} numberOfLines={1}>
+                            {coupon.title}
+                          </Text>
+                          <Text style={styles.marketplaceShop} numberOfLines={1}>
+                            {coupon.shop?.name ?? 'Partner reward'}
+                          </Text>
+                          <Text style={styles.marketplaceDesc} numberOfLines={2}>
+                            {coupon.shortDescription ?? 'Claim this nearby reward from the marketplace.'}
+                          </Text>
+                          <View style={styles.marketplaceFooter}>
+                            <View style={styles.marketplaceCoinPill}>
+                              <Text style={styles.marketplaceCoinText}>
+                                {coupon.cashiPointsCost} Cashi Points
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </>
+            ) : null}
+
+          </ScrollView>
+        </View>
       </View>
       {locationPickerModal}
       {fullScreenQRModal}
@@ -956,7 +996,7 @@ const styles = StyleSheet.create({
   homeLoadingLogo: { width: 160, height: 54 },
   homeLoadingSpinner: { marginTop: 16 },
   homeLoadingText: { marginTop: 12, color: brand.heroBody, fontSize: 13, fontWeight: '600' },
-  
+
   // Hero & Header
   hero: { paddingHorizontal: 24, paddingBottom: 45 },
   topBar: {
@@ -1006,7 +1046,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   inviteLink: { color: brand.surface, fontSize: 14, fontWeight: '800', letterSpacing: 0.2 },
-  
+
   greetingRow: {
     width: '100%',
     flexDirection: 'row',
@@ -1043,20 +1083,20 @@ const styles = StyleSheet.create({
   sheetHandle: { width: 36, height: 4, backgroundColor: '#E0E2EE', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 24 },
 
   // --- BIGGER, REVISED CASHI CARD ---
-  walletCard: { 
-    marginHorizontal: 24, 
+  walletCard: {
+    marginHorizontal: 24,
     height: 216, // Increased height
-    backgroundColor: '#1A1F2C', 
-    borderRadius: 24, 
-    padding: 24, 
-    justifyContent: 'space-between', 
-    overflow: 'hidden', 
-    elevation: 15, 
-    shadowColor: '#000', 
-    shadowOpacity: 0.4, 
-    shadowRadius: 20, 
-    borderWidth: 1, 
-    borderColor: 'rgba(255,255,255,0.08)' 
+    backgroundColor: '#1A1F2C',
+    borderRadius: 24,
+    padding: 24,
+    justifyContent: 'space-between',
+    overflow: 'hidden',
+    elevation: 15,
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)'
   },
   cardGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: brand.blue },
   cardCircle1: { position: 'absolute', right: -20, top: -40, width: 160, height: 160, borderRadius: 80, backgroundColor: 'rgba(59,158,232,0.1)' },
@@ -1069,35 +1109,35 @@ const styles = StyleSheet.create({
   cardTextWrap: { flex: 1, paddingRight: 16 },
   cardName: { color: '#FFFFFF', fontSize: 24, fontWeight: '800', marginBottom: 6 },
   cardDetail: { color: 'rgba(255,255,255,0.6)', fontSize: 13, fontWeight: '500', marginBottom: 12 },
-  
+
   // New visual member ID line
   memberIdWrap: { flexDirection: 'row', alignItems: 'center' },
   memberIdLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
   memberIdVal: { color: brand.blueLight, fontSize: 13, fontWeight: '700', letterSpacing: 1 },
-  
+
   glassQRBox: { backgroundColor: '#FFFFFF', padding: 8, borderRadius: 14, elevation: 5, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10 },
 
   // Merchant Cards Common
   sectionTitleRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 24, marginTop: 32, marginBottom: 18, alignItems: 'center' },
   sectionHeading: { fontSize: 18, fontWeight: '800', color: brand.cardHeading },
   actionText: { color: brand.blue, fontWeight: '700', fontSize: 13 },
-  
+
   nearbyScroll: { paddingLeft: 24, paddingRight: 12, marginBottom: 12 },
   noNearbyWrap: { marginHorizontal: 24, marginBottom: 8, backgroundColor: '#F4F6FB', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12 },
   noNearbyText: { color: brand.helperColor, fontSize: 13, fontWeight: '700' },
-  
+
   // MULTIPLE ITEMS STYLE (Horizontal Scroll)
   merchantCard: { width: 104, marginRight: 16, alignItems: 'center' },
-  merchantLogoWrap: { width: 76, height: 76, borderRadius: 18, backgroundColor: brand.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 12, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 10, elevation: 2, borderWidth: 1, borderColor: '#F0F1F7' },
-  merchantLogoImage: { width: '100%', height: '100%', borderRadius: 18 },
+  merchantLogoWrap: { width: 76, height: 76, borderRadius: 18, overflow: 'hidden', backgroundColor: '#F8F9FB', alignItems: 'center', justifyContent: 'center', marginBottom: 12, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 10, elevation: 2, borderWidth: 1, borderColor: '#F0F1F7' },
+  merchantLogoImage: { width: '100%', height: '100%' },
   merchantInit: { fontSize: 24, fontWeight: '800', color: brand.cardHeading },
   merchantTitle: { fontSize: 13, color: brand.cardHeading, fontWeight: '700', marginBottom: 6, textAlign: 'center' },
-  
+
   // SINGLE ITEM STYLE (Full Width Feature Card)
   singleMerchantWrap: { paddingHorizontal: 24, marginBottom: 12 },
   singleMerchantCard: { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 20, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: '#F0F1F7', shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 8, elevation: 2 },
-  singleMerchantLogoWrap: { width: 60, height: 60, borderRadius: 14, backgroundColor: '#F8F9FB', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#EBECEF' },
-  singleMerchantLogoImage: { width: '100%', height: '100%', borderRadius: 14 },
+  singleMerchantLogoWrap: { width: 60, height: 60, borderRadius: 14, overflow: 'hidden', backgroundColor: '#F8F9FB', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#EBECEF' },
+  singleMerchantLogoImage: { width: '100%', height: '100%' },
   singleMerchantDetails: { flex: 1, marginLeft: 16, justifyContent: 'center' },
   singleMerchantTitle: { fontSize: 16, color: brand.cardHeading, fontWeight: '800', marginBottom: 4 },
   singleMerchantChevron: { paddingLeft: 12 },
@@ -1128,6 +1168,38 @@ const styles = StyleSheet.create({
   quickBtn: { backgroundColor: brand.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 14, alignSelf: 'flex-start', marginTop: 20 },
   quickBtnText: { color: brand.dark, fontSize: 12, fontWeight: '800' },
   quickIconContainer: { position: 'absolute', right: -25, bottom: -10, transform: [{ rotate: '-10deg' }] },
+
+  marketplaceScroll: { paddingLeft: 24, paddingRight: 12, paddingBottom: 8 },
+  marketplaceCard: {
+    width: 220,
+    marginRight: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#F0F1F7',
+  },
+  marketplaceImageWrap: {
+    height: 110,
+    backgroundColor: '#F8F9FB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  marketplaceImage: { width: '100%', height: '100%' },
+  marketplaceInitial: { fontSize: 28, fontWeight: '800', color: brand.cardHeading },
+  marketplaceBody: { padding: 14 },
+  marketplaceTitle: { fontSize: 15, fontWeight: '800', color: brand.cardHeading },
+  marketplaceShop: { fontSize: 11, fontWeight: '700', color: brand.blue, marginTop: 4 },
+  marketplaceDesc: { fontSize: 12, color: brand.helperColor, fontWeight: '600', marginTop: 6, lineHeight: 18 },
+  marketplaceFooter: { marginTop: 12, flexDirection: 'row', justifyContent: 'flex-start' },
+  marketplaceCoinPill: {
+    backgroundColor: brand.blueLight,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  marketplaceCoinText: { color: brand.blue, fontSize: 11, fontWeight: '900' },
 
   // --- BIG QR MODAL STYLES ---
   qrModalBackdrop: {

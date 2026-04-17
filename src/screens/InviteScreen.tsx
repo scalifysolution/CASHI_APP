@@ -68,7 +68,7 @@ export function InviteScreen({ navigation }: Props) {
       return;
     }
     const code = referralCode.trim();
-    const message = `Please download the Cashi app using this link:\n${DOWNLOAD_URL}\n\nUse my referral code: ${code}\n\nYou will get 500 points and I will also receive 500 points when you sign up using this referral code.`;
+    const message = `Please download the Cashi app using this link:\n${DOWNLOAD_URL}\n\nUse my referral code: ${code}\n\nYou will get 500 Cashi Points and I will also receive 500 Cashi Points when you sign up using this referral code.`;
     try {
       // Prefer WhatsApp with prefilled message.
       const encoded = encodeURIComponent(message);
@@ -119,7 +119,7 @@ export function InviteScreen({ navigation }: Props) {
             </Text>
           </View>
           <Text style={styles.hint}>
-            Share your code on WhatsApp. When your friend signs up with it, you both get 500 points.
+            Share your code on WhatsApp. When your friend signs up with it, you both get 500 Cashi Points.
           </Text>
           <TouchableOpacity
             activeOpacity={0.9}

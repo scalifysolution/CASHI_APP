@@ -146,7 +146,7 @@ export function OnboardingScreen() {
                 </Text>
               </View>
               <Text style={styles.myCodeHint}>
-                Share this code with friends. Their welcome reward (100 wallet points for shopping) is
+                Share this code with friends. Their welcome reward (100 Cashi Points for shopping) is
                 not active yet; we will turn it on soon.
               </Text>
             </View>
@@ -223,7 +223,7 @@ export function OnboardingScreen() {
                   />
                 </View>
                 <Text style={styles.fieldFootnote}>
-                  If you join with a friend&apos;s code, you&apos;ll be eligible for 100 wallet points
+                  If you join with a friend&apos;s code, you&apos;ll be eligible for 100 Cashi Points
                   toward future shopping. Point credit is not live yet.
                 </Text>
               </View>

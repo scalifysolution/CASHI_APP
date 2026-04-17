@@ -146,33 +146,35 @@ export function HomeSideMenu({ visible, onClose, navigation }: any) {
 
           <ScrollView style={styles.menuScroll} showsVerticalScrollIndicator={false}>
             {/* --- PREMIUM MERCHANT PORTAL CTA --- */}
-            <TouchableOpacity 
-              style={styles.merchantCard} 
-              activeOpacity={0.9}
-              onPress={() => {
-                closeDrawer();
-                const base = (MERCHANT_PORTAL_URL || '').replace(/\/+$/, '');
-                if (!String(base || '').trim()) {
-                  // MerchantPortalScreen will also show an error, but alerting is clearer here.
-                  // eslint-disable-next-line no-alert
-                  return;
-                }
-                // Always open the dedicated MerchantPortal WebView so we can inject the app token.
-                navigation?.navigate?.('MerchantPortal');
-              }}
-            >
-              <View style={styles.merchantIconBox}>
-                <Icon name={(String(role || '').toUpperCase() === 'USER' || !role) ? 'store' : 'sale'} color={brand.surface} />
-              </View>
-              <View style={styles.merchantTexts}>
-                <Text style={styles.merchantTitle}>
-                  {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Start Cashi on your Store' : 'Register Sale'}
-                </Text>
-                <Text style={styles.merchantSub}>
-                  {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Register your store and become a partner' : 'Record loyalty transactions'}
-                </Text>
-              </View>
-            </TouchableOpacity>
+            {String(role || '').toUpperCase() === 'SUPERADMIN' ? null : (
+              <TouchableOpacity 
+                style={styles.merchantCard} 
+                activeOpacity={0.9}
+                onPress={() => {
+                  closeDrawer();
+                  const base = (MERCHANT_PORTAL_URL || '').replace(/\/+$/, '');
+                  if (!String(base || '').trim()) {
+                    // MerchantPortalScreen will also show an error, but alerting is clearer here.
+                    // eslint-disable-next-line no-alert
+                    return;
+                  }
+                  // Always open the dedicated MerchantPortal WebView so we can inject the app token.
+                  navigation?.navigate?.('MerchantPortal');
+                }}
+              >
+                <View style={styles.merchantIconBox}>
+                  <Icon name={(String(role || '').toUpperCase() === 'USER' || !role) ? 'store' : 'sale'} color={brand.surface} />
+                </View>
+                <View style={styles.merchantTexts}>
+                  <Text style={styles.merchantTitle}>
+                    {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Start Cashi on your Store' : 'Register Sale'}
+                  </Text>
+                  <Text style={styles.merchantSub}>
+                    {(String(role || '').toUpperCase() === 'USER' || !role) ? 'Register your store and become a partner' : 'Record loyalty transactions'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
 
             {/* Menu List */}
             {MENU_ITEMS.map((item, i) => (

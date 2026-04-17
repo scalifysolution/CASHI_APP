@@ -90,7 +90,7 @@ export function LoginScreen() {
               Shop Local.{'\n'}Earn Rewards.
             </Text>
             <Text style={styles.heroSub}>
-              Turn every purchase at your neighbourhood store into points,
+              Turn every purchase at your neighbourhood store into Cashi Points,
               perks, and feel-good impact.
             </Text>
 

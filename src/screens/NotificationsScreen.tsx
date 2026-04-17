@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -39,7 +42,7 @@ const NOTIFICATIONS = [
   {
     id: '1',
     type: 'reward',
-    title: 'Coins Credited!',
+    title: 'Cashi Coins Credited!',
     message: 'You earned 45 Cashi Coins from your order at Deep@toys.',
     time: '2 mins ago',
     unread: true,
@@ -72,7 +75,38 @@ const NOTIFICATIONS = [
 
 export function NotificationsScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
-  const [filter, setFilter] = useState('All');
+  const tabs = ['All', 'Rewards', 'Alerts'] as const;
+  type Tab = (typeof tabs)[number];
+  const [filter, setFilter] = useState<Tab>('All');
+  const pagerRef = useRef<ScrollView | null>(null);
+  const [pageWidth, setPageWidth] = useState(0);
+
+  const dataForTab = useMemo(() => {
+    return {
+      All: NOTIFICATIONS,
+      Rewards: NOTIFICATIONS.filter((n) => n.type === 'reward'),
+      Alerts: NOTIFICATIONS.filter((n) => n.type !== 'reward'),
+    } as const;
+  }, []);
+
+  const goToTab = (tab: Tab) => {
+    setFilter(tab);
+    const idx = tabs.indexOf(tab);
+    if (idx >= 0 && pageWidth) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: true });
+  };
+
+  useEffect(() => {
+    const idx = tabs.indexOf(filter);
+    if (idx >= 0 && pageWidth) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageWidth]);
+
+  const onPagerMomentumEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const idx = pageWidth ? Math.round(x / pageWidth) : 0;
+    const next = tabs[Math.max(0, Math.min(tabs.length - 1, idx))];
+    if (next && next !== filter) setFilter(next);
+  };
 
   const renderItem = ({ item }: { item: typeof NOTIFICATIONS[0] }) => (
     <TouchableOpacity 
@@ -116,10 +150,10 @@ export function NotificationsScreen({ navigation }: any) {
 
         {/* --- CATEGORY TABS --- */}
         <View style={styles.tabScroll}>
-          {['All', 'Rewards', 'Alerts'].map((tab) => (
+          {tabs.map((tab) => (
             <TouchableOpacity 
               key={tab} 
-              onPress={() => setFilter(tab)}
+              onPress={() => goToTab(tab)}
               style={[styles.pill, filter === tab && styles.activePill]}
             >
               <Text style={[styles.pillText, filter === tab && styles.activePillText]}>{tab}</Text>
@@ -132,16 +166,31 @@ export function NotificationsScreen({ navigation }: any) {
       <View style={styles.sheet}>
         <View style={styles.sheetHandle} />
         
-        <FlatList
-          data={NOTIFICATIONS}
-          renderItem={renderItem}
-          keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 120 }}
-          ListHeaderComponent={() => (
-            <Text style={styles.listLabel}>Recently Received</Text>
-          )}
-        />
+        <View style={styles.pagerWrap} onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}>
+          <ScrollView
+            ref={(r) => {
+              pagerRef.current = r;
+            }}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={onPagerMomentumEnd}
+            scrollEventThrottle={16}
+          >
+            {tabs.map((tab) => (
+              <View key={tab} style={{ width: pageWidth || 1, flex: 1 }}>
+                <FlatList
+                  data={dataForTab[tab]}
+                  renderItem={renderItem}
+                  keyExtractor={(item) => item.id}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 120 }}
+                  ListHeaderComponent={() => <Text style={styles.listLabel}>Recently Received</Text>}
+                />
+              </View>
+            ))}
+          </ScrollView>
+        </View>
       </View>
     </View>
   );
@@ -167,6 +216,7 @@ const styles = StyleSheet.create({
   // Sheet
   sheet: { flex: 1, backgroundColor: brand.background, borderTopLeftRadius: 36, borderTopRightRadius: 36, marginTop: -10 },
   sheetHandle: { width: 36, height: 4, backgroundColor: '#E0E2EE', borderRadius: 2, alignSelf: 'center', marginVertical: 15 },
+  pagerWrap: { flex: 1 },
   
   listLabel: { fontSize: 13, fontWeight: '800', color: brand.helperColor, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 20 },
 

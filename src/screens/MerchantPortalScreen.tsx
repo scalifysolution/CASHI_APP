@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { ActivityIndicator, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -6,7 +6,9 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MERCHANT_PORTAL_URL } from '../config/env';
 import type { RootStackParamList } from '../navigation/types';
 import { brand } from '../theme';
-import { useAppSelector } from '../store/hooks';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { fetchMe, setAccessToken } from '../store/authSlice';
+import { saveAccessToken } from '../store/authStorage';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'MerchantPortal'>;
@@ -14,14 +16,18 @@ type Props = {
 
 export function MerchantPortalScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const dispatch = useAppDispatch();
   const baseUrl = (MERCHANT_PORTAL_URL || '').trim().replace(/\/+$/, '');
   const token = useAppSelector((s) => s.auth.accessToken);
   const user = useAppSelector((s) => s.user);
+  const role = String(user?.role ?? '').toUpperCase();
 
   const url = useMemo(() => {
     if (!baseUrl) return '';
-    return `${baseUrl}/login?fromApp=1`;
-  }, [baseUrl]);
+    // Customer tokens must land on /login (special register flow). Merchant roles can go straight to dashboard.
+    if (role === 'USER' || !role) return `${baseUrl}/login?fromApp=1`;
+    return `${baseUrl}/home`;
+  }, [baseUrl, role]);
 
   const injected = useMemo(() => {
     const safeToken = token ? JSON.stringify(token) : '""';
@@ -32,7 +38,6 @@ export function MerchantPortalScreen({ navigation }: Props) {
       name: user?.displayName ?? '',
       role: user?.role ?? '',
     };
-    const safeProfile = JSON.stringify(profile);
 
     return `
       (function () {
@@ -40,12 +45,46 @@ export function MerchantPortalScreen({ navigation }: Props) {
           if (${safeToken} && ${safeToken}.length > 0) {
             localStorage.setItem('cashi_access_token', ${safeToken});
           }
-          localStorage.setItem('cashi_app_profile', ${JSON.stringify(safeProfile)});
+          // Store a JSON object as JSON text for the portal to parse.
+          localStorage.setItem('cashi_app_profile', JSON.stringify(${JSON.stringify(profile)}));
         } catch (e) {}
       })();
       true;
     `;
   }, [token, user?.id, user?.email, user?.phone, user?.displayName, user?.role]);
+
+  const onMessage = async (e: any) => {
+    const raw = String(e?.nativeEvent?.data ?? '');
+    if (!raw) return;
+    let msg: any = null;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const nextToken = String(msg?.accessToken ?? '').trim();
+    if (msg?.type !== 'CASHI_PORTAL_AUTH' || !nextToken) return;
+
+    // Persist + refresh app session so role changes (USER -> ADMIN) reflect immediately.
+    try {
+      await saveAccessToken(nextToken);
+    } catch {
+      // ignore
+    }
+    dispatch(setAccessToken(nextToken));
+    try {
+      await dispatch(fetchMe(nextToken)).unwrap();
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      // When user comes back from portal, re-check current session.
+      dispatch(fetchMe());
+    };
+  }, [dispatch]);
 
   return (
     <View style={styles.container}>
@@ -72,9 +111,12 @@ export function MerchantPortalScreen({ navigation }: Props) {
         <WebView
           source={{ uri: url }}
           style={styles.webview}
+          scrollEnabled
+          nestedScrollEnabled
           javaScriptEnabled
           domStorageEnabled
           injectedJavaScriptBeforeContentLoaded={injected}
+          onMessage={onMessage}
           startInLoadingState
           renderLoading={() => (
             <View style={styles.loading}>

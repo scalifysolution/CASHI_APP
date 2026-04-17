@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackScreenProps } from '../navigation/types';
 import { apiRequest } from '../api/client';
 import { API_BASE_URL } from '../config/env';
+import { RemoteAssetImage } from '../components/RemoteAssetImage';
 import { brand } from '../theme';
 import { useAppSelector } from '../store/hooks';
 
@@ -35,6 +36,9 @@ type ShopActivityItem = {
   id: string;
   createdAt: string;
   amount: number;
+  cashiCoinsEarned?: number;
+  cashiPointsEarned?: number;
+  cashiPointsRedeemed?: number;
   originalAmount: number | null;
   discountAmount: number;
   pointsEarned: number;
@@ -43,11 +47,23 @@ type ShopActivityItem = {
 
 type ShopActivityResponse = {
   shopId: string;
-  stats: { visits: number; coinsEarned: number; cashback: number };
+  stats: {
+    visits: number;
+    cashiPointsAvailable?: number;
+    cashiPointsEarned?: number;
+    cashiPointsRedeemed?: number;
+    cashiCoinsEarned?: number;
+    savedAmount: number;
+  };
   page: number;
   limit: number;
   total: number;
   items: ShopActivityItem[];
+};
+
+type Dashboard = {
+  cashiPoints?: { available: number; earned?: number; spent?: number };
+  cashiCoins?: { available: number; earned?: number; spent?: number };
 };
 
 type ShopCouponItem = {
@@ -114,7 +130,7 @@ function formatTxnDate(iso: string) {
 export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'ShopDetail'>) {
   const insets = useSafeAreaInsets();
   const token = useAppSelector((s) => s.auth.accessToken);
-  const shopFromRoute = (route?.params?.shop ?? {}) as any;
+  const shopFromRoute = useMemo(() => (route?.params?.shop ?? {}) as any, [route?.params?.shop]);
   const [shop, setShop] = useState<any>(shopFromRoute);
   const [loadingRemote, setLoadingRemote] = useState(false);
 
@@ -125,6 +141,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
 
   const [activity, setActivity] = useState<ShopActivityResponse | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [dash, setDash] = useState<Dashboard | null>(null);
 
   const [txModalVisible, setTxModalVisible] = useState(false);
   const [txPage, setTxPage] = useState(1);
@@ -155,13 +172,17 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
     if (!token || !shopId) return () => {};
 
     setActivityLoading(true);
-    void apiRequest<ShopActivityResponse>(
-      `/users/me/shop-activity?shopId=${encodeURIComponent(shopId)}&page=1&limit=2`,
-      { method: 'GET', token },
-    )
-      .then((res) => {
+    Promise.all([
+      apiRequest<ShopActivityResponse>(
+        `/users/me/shop-activity?shopId=${encodeURIComponent(shopId)}&page=1&limit=2`,
+        { method: 'GET', token },
+      ),
+      apiRequest<Dashboard>('/users/me/dashboard', { method: 'GET', token }).catch(() => null),
+    ])
+      .then(([res, d]) => {
         if (!alive) return;
         setActivity(res);
+        if (d) setDash(d);
       })
       .catch(() => {})
       .finally(() => {
@@ -172,6 +193,9 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
       alive = false;
     };
   }, [token, shopId]);
+
+  const pointsAvail = Number(activity?.stats?.cashiPointsAvailable ?? dash?.cashiPoints?.available ?? 0);
+  const coinsAvail = Number(activity?.stats?.cashiCoinsEarned ?? dash?.cashiCoins?.available ?? 0);
 
   useEffect(() => {
     let alive = true;
@@ -293,7 +317,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
           setAvailableShopCoupons((prev) => prev.filter((c) => c.id !== coupon.id));
           navigation.navigate('CouponPass', { item: assignment });
         }
-      } catch (e: any) {
+      } catch {
         // keep it simple; UI already has lots of alerts elsewhere
       } finally {
         setClaimingCouponId(null);
@@ -409,20 +433,27 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
               <View style={{ width: 44 }} />
             </View>
 
-            <View style={styles.txModalSummaryRow}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.txModalSummaryRow}>
               <View style={styles.txSummaryPill}>
                 <Text style={styles.txSummaryLabel}>VISITS</Text>
                 <Text style={styles.txSummaryValue}>{activity?.stats?.visits ?? 0}</Text>
               </View>
               <View style={styles.txSummaryPill}>
-                <Text style={styles.txSummaryLabel}>COINS</Text>
-                <Text style={styles.txSummaryValue}>{activity?.stats?.coinsEarned ?? 0}</Text>
+                <Text style={styles.txSummaryLabel}>CASHI POINTS</Text>
+                <Text style={styles.txSummaryValue}>{pointsAvail}</Text>
+              </View>
+              <View style={styles.txSummaryPill}>
+                <Text style={styles.txSummaryLabel}>CASHI COINS</Text>
+                <Text style={styles.txSummaryValue}>{coinsAvail}</Text>
               </View>
               <View style={styles.txSummaryPill}>
                 <Text style={styles.txSummaryLabel}>CASHBACK</Text>
-                <Text style={styles.txSummaryValue}>₹{activity?.stats?.cashback ?? 0}</Text>
+                <Text style={styles.txSummaryValue}>₹{activity?.stats?.savedAmount ?? 0}</Text>
               </View>
-            </View>
+            </ScrollView>
 
             <FlatList
               data={txItems}
@@ -456,7 +487,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
                   <View style={styles.txValues}>
                     <Text style={styles.txAmount}>₹{item.amount}</Text>
                     <Text style={styles.txRewards}>
-                      +{item.pointsEarned} Coins {item.discountAmount > 0 ? ` • ₹${item.discountAmount} CB` : ''}
+                      +{Number(item.cashiPointsEarned ?? 0)} Cashi Points • +{Number(item.cashiCoinsEarned ?? 0)} Cashi Coins {item.discountAmount > 0 ? ` • ₹${item.discountAmount} CB` : ''}
                     </Text>
                   </View>
                 </View>
@@ -517,7 +548,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
                   >
                     <View style={styles.couponImgWrap}>
                       {imgUrl ? (
-                        <Image source={{ uri: imgUrl }} style={styles.couponImg} resizeMode="cover" />
+                        <RemoteAssetImage uri={imgUrl} style={styles.couponImg} resizeMode="cover" />
                       ) : (
                         <View style={styles.couponImgFallback}>
                           <Text style={styles.couponImgFallbackText}>%</Text>
@@ -620,13 +651,13 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
             <Text style={styles.sectionHeading}>My Activity Here</Text>
             <View style={styles.statsGrid}>
               <View style={styles.statBox}>
-                <Text style={styles.statValue}>{activity?.stats?.visits ?? 0}</Text>
-                <Text style={styles.statLabel}>VISITS</Text>
+                <Text style={styles.statValue}>{pointsAvail}</Text>
+                <Text style={styles.statLabel}>CASHI POINTS</Text>
               </View>
               <View style={styles.statDivider} />
               <View style={styles.statBox}>
-                <Text style={styles.statValue}>{activity?.stats?.coinsEarned ?? 0}</Text>
-                <Text style={styles.statLabel}>COINS</Text>
+                <Text style={styles.statValue}>{coinsAvail}</Text>
+                <Text style={styles.statLabel}>CASHI COINS</Text>
               </View>
               <View style={styles.statDivider} />
               <View style={styles.statBox}>
@@ -676,7 +707,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
                     >
                       <View style={styles.couponImgWrap}>
                         {imgUrl ? (
-                          <Image source={{ uri: imgUrl }} style={styles.couponImg} resizeMode="cover" />
+                          <RemoteAssetImage uri={imgUrl} style={styles.couponImg} resizeMode="cover" />
                         ) : (
                           <View style={styles.couponImgFallback}>
                             <Text style={styles.couponImgFallbackText}>%</Text>
@@ -719,7 +750,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
                     <View key={c.id} style={[styles.couponRow, idx === 0 && styles.couponRowFirst]}>
                       <View style={styles.couponImgWrap}>
                         {imgUrl ? (
-                          <Image source={{ uri: imgUrl }} style={styles.couponImg} resizeMode="cover" />
+                          <RemoteAssetImage uri={imgUrl} style={styles.couponImg} resizeMode="cover" />
                         ) : (
                           <View style={styles.couponImgFallback}>
                             <Text style={styles.couponImgFallbackText}>%</Text>
@@ -733,7 +764,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
                         <Text style={styles.couponSub} numberOfLines={2}>
                           {c.shortDescription ?? 'Grab this coupon using Cashi Points'}
                         </Text>
-                        <Text style={styles.couponMeta}>Cost: {Number(c.cashiPointsCost ?? 0)} points</Text>
+                        <Text style={styles.couponMeta}>Cost: {Number(c.cashiPointsCost ?? 0)} Cashi Points</Text>
                       </View>
 
                       <TouchableOpacity
@@ -778,7 +809,7 @@ export function ShopDetailScreen({ navigation, route }: RootStackScreenProps<'Sh
                     <View style={styles.txValues}>
                       <Text style={styles.txAmount}>₹{tx.amount}</Text>
                       <Text style={styles.txRewards}>
-                        +{tx.pointsEarned} Coins {tx.discountAmount > 0 ? ` • ₹${tx.discountAmount} CB` : ''}
+                        +{Number(tx.cashiPointsEarned ?? 0)} Cashi Points • +{Number(tx.cashiCoinsEarned ?? 0)} Cashi Coins {tx.discountAmount > 0 ? ` • ₹${tx.discountAmount} CB` : ''}
                       </Text>
                     </View>
                   </View>
@@ -1044,6 +1075,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginTop: 6,
   },
+  statSub: {
+    marginTop: 4,
+    color: brand.helperColor,
+    fontSize: 11,
+    fontWeight: '700',
+  },
   statDivider: {
     width: 1,
     height: '80%',
@@ -1200,10 +1237,11 @@ const styles = StyleSheet.create({
   txModalSummaryRow: {
     flexDirection: 'row',
     paddingBottom: 10,
+    paddingHorizontal: 6,
   },
   txSummaryPill: {
-    flex: 1,
-    marginHorizontal: 5,
+    width: 120,
+    marginRight: 10,
     backgroundColor: '#F8F9FB',
     borderRadius: 16,
     paddingVertical: 10,
@@ -1222,6 +1260,12 @@ const styles = StyleSheet.create({
     color: brand.blue,
     fontSize: 16,
     fontWeight: '900',
+  },
+  txSummarySub: {
+    marginTop: 4,
+    color: brand.helperColor,
+    fontSize: 11,
+    fontWeight: '800',
   },
 
   // --- SHOP COUPONS ---

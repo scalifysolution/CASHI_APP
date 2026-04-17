@@ -1,11 +1,13 @@
 // @refresh reset
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   ActivityIndicator,
   FlatList,
   Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   RefreshControl,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -18,6 +20,7 @@ import { apiRequest } from '../api/client';
 import { API_BASE_URL } from '../config/env';
 import { useAppSelector } from '../store/hooks';
 import { brand } from '../theme';
+import { SegmentedTabs } from '../components/SegmentedTabs';
 
 // --- Professional High-Fidelity Icons ---
 const RewardIcon = ({ type, color, size = 16 }: { type: 'cash' | 'coin' | 'pts' | 'empty'; color: string; size?: number }) => (
@@ -35,23 +38,18 @@ const RewardIcon = ({ type, color, size = 16 }: { type: 'cash' | 'coin' | 'pts' 
 );
 
 type Dashboard = {
-  points: { available: number; earned: number; redeemed: number };
+  cashiCoins: { available: number; earned: number; spent: number };
+  cashiPoints?: { available: number; earned?: number; redeemed?: number };
   cashback: { savedAmount: number };
-};
-
-type ShopItem = {
-  id: string;
-  name: string;
-  city?: string | null;
-  state?: string | null;
-  imageUrl?: string | null;
-  distanceKm?: number | null;
 };
 
 type EarningItem = {
   id: string;
   createdAt: string;
   amount: number;
+  cashiCoinsEarned?: number;
+  cashiPointsEarned?: number;
+  cashiPointsRedeemed?: number;
   originalAmount: number | null;
   discountAmount: number;
   pointsEarned: number;
@@ -91,6 +89,10 @@ export function MyLoyaltyScreen({ navigation }: any) {
   const loadingMoreRef = useRef(false);
   const reachedEndDuringMomentumRef = useRef(false);
   const lastRequestedPageRef = useRef(0);
+  const pagerRef = useRef<ScrollView | null>(null);
+  const [pageWidth, setPageWidth] = useState(0);
+  const tabs = useMemo(() => ['Earnings', 'Redeemed'] as const, []);
+  type Tab = (typeof tabs)[number];
 
   const load = async (mode: 'initial' | 'refresh' | 'more') => {
     if (!token) return;
@@ -137,24 +139,46 @@ export function MyLoyaltyScreen({ navigation }: any) {
 
   /**
    * Business meaning:
-   * - Loyalty points == COINS (₹1 per coin) => use points.available (remaining)
-   * - "Points" are Cashi points (separate system; not implemented yet) => show 0 for now
+   * - Cashi Points: loyalty points / rewards balance => cashiPoints.available
+   * - Cashi Coins: coins earned from shopping savings => cashiCoins.available
    */
-  const pointsText = useMemo(() => '0', []);
-  const coinsText = useMemo(() => String(dash?.points?.available ?? 0), [dash]);
+  const pointsAvailText = useMemo(() => String(dash?.cashiPoints?.available ?? 0), [dash]);
+  const coinsAvailText = useMemo(() => String(dash?.cashiCoins?.available ?? 0), [dash]);
   const cashbackText = useMemo(() => `₹${dash?.cashback?.savedAmount ?? 0}`, [dash]);
 
-  const filtered = useMemo(() => {
-    if (activeTab === 'Redeemed') return items.filter((i) => (i.pointsRedeemed ?? 0) > 0);
-    return items.filter((i) => (i.pointsEarned ?? 0) > 0);
-  }, [activeTab, items]);
+  const earningsItems = useMemo(() => items.filter((i) => (i.pointsEarned ?? 0) > 0), [items]);
+  const redeemedItems = useMemo(() => items.filter((i) => (i.pointsRedeemed ?? 0) > 0), [items]);
 
-  const renderTransaction = ({ item, index }: { item: EarningItem; index: number }) => {
+  const goToTab = (tab: Tab) => {
+    setActiveTab(tab);
+    const idx = tabs.indexOf(tab);
+    if (idx >= 0 && pageWidth) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: true });
+  };
+
+  useEffect(() => {
+    const idx = tabs.indexOf(activeTab);
+    if (idx >= 0 && pageWidth) pagerRef.current?.scrollTo({ x: idx * pageWidth, animated: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageWidth]);
+
+  const onPagerMomentumEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const idx = pageWidth ? Math.round(x / pageWidth) : 0;
+    const next = tabs[Math.max(0, Math.min(tabs.length - 1, idx))];
+    if (next && next !== activeTab) setActiveTab(next);
+  };
+
+  const renderTransactionForTab =
+    (tab: Tab, listLen: number) =>
+    ({ item, index }: { item: EarningItem; index: number }) => {
     const store = item.shop?.name ?? 'Store';
     const storeImg = assetUrl(item.shop?.imageUrl ?? null);
-    const isRedeem = activeTab === 'Redeemed';
-    const coins = isRedeem ? item.pointsRedeemed : item.pointsEarned;
-    const isLast = index === filtered.length - 1;
+    const isRedeem = tab === 'Redeemed';
+    const cashiCoins = Math.max(0, Number(item.cashiCoinsEarned ?? 0));
+    const cashiPoints = isRedeem
+      ? Math.max(0, Number(item.cashiPointsRedeemed ?? item.pointsRedeemed ?? 0))
+      : Math.max(0, Number(item.cashiPointsEarned ?? item.pointsEarned ?? 0));
+    const isLast = index === listLen - 1;
 
     return (
       <TouchableOpacity
@@ -179,10 +203,16 @@ export function MyLoyaltyScreen({ navigation }: any) {
         
         <View style={styles.amountCol}>
           <Text style={styles.transactionAmount}>₹{item.amount}</Text>
+          <View style={styles.pointsBadge}>
+            <View style={styles.pointsDot} />
+            <Text style={styles.pointsText}>
+              {isRedeem ? `-${cashiPoints}` : `+${cashiPoints}`} Cashi Points
+            </Text>
+          </View>
           <View style={[styles.coinBadge, isRedeem && styles.coinBadgeRedeem]}>
             <View style={[styles.coinDot, isRedeem && styles.coinDotRedeem]} />
             <Text style={[styles.coinText, isRedeem && styles.coinTextRedeem]}>
-              {isRedeem ? `-${coins}` : `+${coins}`}
+              {isRedeem ? `-${cashiCoins}` : `+${cashiCoins}`} Cashi Coins
             </Text>
           </View>
         </View>
@@ -211,7 +241,7 @@ export function MyLoyaltyScreen({ navigation }: any) {
         <View style={styles.heroContent}>
             <Text style={styles.heroGreeting}>Loyalty Wallet</Text>
             <Text style={styles.heroSub}>
-              Track your points, coins, and cashback. Shop at partners to grow your balance.
+              Track your Cashi Points, Cashi Coins, and cashback. Shop at partners to grow your balance.
             </Text>
 
             <View style={styles.balanceWidget}>
@@ -220,7 +250,7 @@ export function MyLoyaltyScreen({ navigation }: any) {
                   <RewardIcon type="pts" color={brand.heroBody} size={14} />
                   <Text style={styles.balLabel}>CASHI POINTS</Text>
                 </View>
-                <Text style={styles.balVal}>{pointsText}</Text>
+                <Text style={styles.balVal}>{pointsAvailText}</Text>
               </View>
 
               <View style={styles.balDivider} />
@@ -228,9 +258,9 @@ export function MyLoyaltyScreen({ navigation }: any) {
               <View style={styles.balanceItem}>
                 <View style={styles.balIconRow}>
                   <RewardIcon type="coin" color={brand.blue} size={14} />
-                  <Text style={[styles.balLabel, { color: brand.blue }]}>COINS</Text>
+                  <Text style={[styles.balLabel, { color: brand.blue }]}>CASHI COINS</Text>
                 </View>
-                <Text style={[styles.balVal, { color: brand.blue }]}>{coinsText}</Text>
+                <Text style={[styles.balVal, { color: brand.blue }]}>{coinsAvailText}</Text>
               </View>
 
               <View style={styles.balDivider} />
@@ -250,87 +280,114 @@ export function MyLoyaltyScreen({ navigation }: any) {
       <View style={styles.sheet}>
         <View style={styles.sheetHandle} />
 
-        <FlatList
-          data={filtered}
-          renderItem={renderTransaction}
-          keyExtractor={(it) => it.id}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor={brand.blue} />
-          }
-          ListHeaderComponent={() => (
-            <View style={styles.listHeaderContainer}>
-              <View style={styles.segmentContainer}>
-                {(['Earnings', 'Redeemed'] as const).map((tab) => (
-                  <TouchableOpacity
-                    key={tab}
-                    activeOpacity={0.8}
-                    onPress={() => setActiveTab(tab)}
-                    style={[styles.segmentTab, activeTab === tab && styles.activeSegment]}>
-                    <Text style={[styles.segmentLabel, activeTab === tab && styles.activeSegmentLabel]}>
-                      {tab}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+        <View style={styles.listHeaderContainer}>
+          <SegmentedTabs
+            options={tabs}
+            value={activeTab}
+            onChange={goToTab}
+            containerStyle={styles.segmentContainer}
+            tabStyle={styles.segmentTab}
+            indicatorStyle={styles.activeSegment}
+            textStyle={styles.segmentLabel}
+            activeTextStyle={styles.activeSegmentLabel}
+            inset={4}
+          />
 
-              <View style={styles.listHeader}>
-                <Text style={styles.sectionHeading}>Recent Activity</Text>
-                {loading ? (
-                  <Text style={styles.sectionSubText}>Syncing wallet...</Text>
-                ) : error ? (
-                  <Text style={styles.sectionSubTextError}>Couldn't load. Pull to retry.</Text>
-                ) : null}
-              </View>
-            </View>
-          )}
-          onEndReachedThreshold={0.4}
-          onEndReached={() => {
-            if (reachedEndDuringMomentumRef.current || loading || refreshing || loadingMore || !hasMore || items.length < PAGE_SIZE) return;
-            reachedEndDuringMomentumRef.current = true;
-            void load('more');
-          }}
-          onMomentumScrollBegin={() => {
-            reachedEndDuringMomentumRef.current = false;
-          }}
-          ListFooterComponent={
-            loadingMore ? (
-              <View style={styles.footerLoading}>
-                <ActivityIndicator color={brand.blue} size="small" />
-                <Text style={styles.footerLoadingText}>Loading older transactions...</Text>
-              </View>
-            ) : null
-          }
-          ListEmptyComponent={() => {
-            if (loading) return null;
-            if (error) {
+          <View style={styles.listHeader}>
+            <Text style={styles.sectionHeading}>Recent Activity</Text>
+            {loading ? (
+              <Text style={styles.sectionSubText}>Syncing wallet...</Text>
+            ) : error ? (
+              <Text style={styles.sectionSubTextError}>Couldn't load. Pull to retry.</Text>
+            ) : null}
+          </View>
+        </View>
+
+        <View style={styles.pagerWrap} onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}>
+          <ScrollView
+            ref={(r) => {
+              pagerRef.current = r;
+            }}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={onPagerMomentumEnd}
+            scrollEventThrottle={16}
+          >
+            {tabs.map((tab) => {
+              const list = tab === 'Redeemed' ? redeemedItems : earningsItems;
               return (
-                <View style={styles.emptyWrap}>
-                  <RewardIcon type="empty" color={brand.helperColor} size={32} />
-                  <Text style={styles.emptyTitle}>Couldn’t load history</Text>
-                  <Text style={styles.emptySub}>Check your connection and try again.</Text>
-                  <TouchableOpacity style={styles.emptyBtn} onPress={() => load('refresh')} activeOpacity={0.9}>
-                    <Text style={styles.emptyBtnText}>Retry</Text>
-                  </TouchableOpacity>
+                <View key={tab} style={{ width: pageWidth || 1, flex: 1 }}>
+                  <FlatList
+                    data={list}
+                    renderItem={renderTransactionForTab(tab, list.length)}
+                    keyExtractor={(it) => it.id}
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+                    refreshControl={
+                      <RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor={brand.blue} />
+                    }
+                    onEndReachedThreshold={0.4}
+                    onEndReached={() => {
+                      if (tab !== activeTab) return;
+                      if (
+                        reachedEndDuringMomentumRef.current ||
+                        loading ||
+                        refreshing ||
+                        loadingMore ||
+                        !hasMore ||
+                        items.length < PAGE_SIZE
+                      )
+                        return;
+                      reachedEndDuringMomentumRef.current = true;
+                      void load('more');
+                    }}
+                    onMomentumScrollBegin={() => {
+                      if (tab !== activeTab) return;
+                      reachedEndDuringMomentumRef.current = false;
+                    }}
+                    ListFooterComponent={
+                      tab === activeTab && loadingMore ? (
+                        <View style={styles.footerLoading}>
+                          <ActivityIndicator color={brand.blue} size="small" />
+                          <Text style={styles.footerLoadingText}>Loading older transactions...</Text>
+                        </View>
+                      ) : null
+                    }
+                    ListEmptyComponent={() => {
+                      if (loading) return null;
+                      if (error) {
+                        return (
+                          <View style={styles.emptyWrap}>
+                            <RewardIcon type="empty" color={brand.helperColor} size={32} />
+                            <Text style={styles.emptyTitle}>Couldn’t load history</Text>
+                            <Text style={styles.emptySub}>Check your connection and try again.</Text>
+                            <TouchableOpacity style={styles.emptyBtn} onPress={() => load('refresh')} activeOpacity={0.9}>
+                              <Text style={styles.emptyBtnText}>Retry</Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      }
+                      return (
+                        <View style={styles.emptyWrap}>
+                          <RewardIcon type="empty" color={brand.helperColor} size={36} />
+                          <Text style={styles.emptyTitle}>
+                            {tab === 'Redeemed' ? 'No Redemptions Yet' : 'No Earnings Yet'}
+                          </Text>
+                          <Text style={styles.emptySub}>
+                            {tab === 'Redeemed'
+                              ? 'Cashi Points and Cashi Coins activity will appear here.'
+                              : 'Shop at partner stores to start stacking up Cashi Points and Cashi Coins.'}
+                          </Text>
+                        </View>
+                      );
+                    }}
+                  />
                 </View>
               );
-            }
-            return (
-              <View style={styles.emptyWrap}>
-                <RewardIcon type="empty" color={brand.helperColor} size={36} />
-                <Text style={styles.emptyTitle}>
-                  {activeTab === 'Redeemed' ? 'No Redemptions Yet' : 'No Earnings Yet'}
-                </Text>
-                <Text style={styles.emptySub}>
-                  {activeTab === 'Redeemed'
-                    ? 'Coins you spend at our partner stores will appear here.'
-                    : 'Shop at partner stores to start stacking up coins and rewards.'}
-                </Text>
-              </View>
-            );
-          }}
-        />
+            })}
+          </ScrollView>
+        </View>
       </View>
     </View>
   );
@@ -364,11 +421,13 @@ const styles = StyleSheet.create({
   balIconRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 6 },
   balLabel: { color: brand.heroBody, fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
   balVal: { color: brand.surface, fontSize: 20, fontWeight: '900', letterSpacing: -0.5 },
+  balSub: { marginTop: 4, color: 'rgba(255,255,255,0.65)', fontSize: 11, fontWeight: '700' },
   balDivider: { width: 1, height: '80%', backgroundColor: 'rgba(255,255,255,0.1)', alignSelf: 'center' },
 
   // Sheet
   sheet: { flex: 1, backgroundColor: '#F8F9FB', borderTopLeftRadius: 32, borderTopRightRadius: 32, marginTop: -24 },
   sheetHandle: { width: 40, height: 5, backgroundColor: '#E2E5F1', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 20 },
+  pagerWrap: { flex: 1 },
   
   listHeaderContainer: { paddingHorizontal: 24 },
   
@@ -416,6 +475,10 @@ const styles = StyleSheet.create({
   coinBadgeRedeem: { backgroundColor: '#FFF0F0' },
   coinDotRedeem: { backgroundColor: '#FF5252' },
   coinTextRedeem: { color: '#FF5252' },
+
+  pointsBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0B1020', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginBottom: 6 },
+  pointsDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.65)', marginRight: 5 },
+  pointsText: { color: 'rgba(255,255,255,0.92)', fontSize: 11, fontWeight: '900' },
 
   footerLoading: { paddingVertical: 20, alignItems: 'center', justifyContent: 'center', gap: 10, flexDirection: 'row' },
   footerLoadingText: { fontSize: 13, color: brand.helperColor, fontWeight: '700' },
